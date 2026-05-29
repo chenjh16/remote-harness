@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# remote-harness / mount-project.sh
+# Mount a laptop directory (via `ssh <alias>`) onto a LOCAL path with sshfs so the agent edits
+# it as local files (changes land on the laptop). The default mountpoint is the CURRENT
+# directory (your Claude Code project dir) — and it must be EMPTY, so the remote project can
+# cleanly become the project root and the mount doesn't hide existing files. Use --unmount to
+# detach. Prints KEY=VALUE.
+#
+#   mount-project.sh --alias NAME --remote-path /path [--mountpoint DIR] [--force]
+#   mount-project.sh --alias NAME --unmount [--mountpoint DIR]
+set -uo pipefail
+
+emit() { printf '%s=%s\n' "$1" "$2"; }
+note() { printf '%s\n' "$*" >&2; }
+
+ALIAS="" RPATH="" MP="" UNMOUNT=0 FORCE=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --alias)       ALIAS="$2"; shift 2;;
+    --remote-path) RPATH="$2"; shift 2;;
+    --mountpoint)  MP="$2"; shift 2;;
+    --unmount)     UNMOUNT=1; shift;;
+    --force)       FORCE=1; shift;;
+    *) shift;;
+  esac
+done
+[ -n "$ALIAS" ] || { note "usage: mount-project.sh --alias NAME --remote-path /path [--mountpoint DIR] [--force]"; note "       mount-project.sh --alias NAME --unmount [--mountpoint DIR]"; exit 2; }
+
+# Default mountpoint = current directory (the Claude Code project dir).
+[ -n "$MP" ] || MP="$PWD"
+
+is_mounted() {
+  if command -v mountpoint >/dev/null 2>&1; then mountpoint -q "$1" && return 0; fi
+  mount 2>/dev/null | grep -qF " $1 "
+}
+
+if [ "$UNMOUNT" = 1 ]; then
+  fusermount -u "$MP" 2>/dev/null || fusermount3 -u "$MP" 2>/dev/null || umount "$MP" 2>/dev/null || true
+  emit STATUS unmounted; emit MOUNTPOINT "$MP"
+  exit 0
+fi
+
+[ -n "$RPATH" ] || { note "need --remote-path"; exit 2; }
+
+if ! command -v sshfs >/dev/null 2>&1; then
+  emit STATUS need-sshfs; emit INSTALL_CMD "sudo apt-get install -y sshfs"
+  note "sshfs is not installed. Install it once (the user runs the command above), then re-run."
+  exit 3
+fi
+
+if is_mounted "$MP"; then
+  emit STATUS already-mounted; emit MOUNTPOINT "$MP"; emit REMOTE "$ALIAS:$RPATH"
+  exit 0
+fi
+
+mkdir -p "$MP"
+# SAFETY: refuse to mount onto a non-empty directory — sshfs would HIDE its contents, and for
+# project-dir mounting the target must be empty so the remote project becomes the project root.
+if [ "$FORCE" != 1 ] && [ -n "$(ls -A "$MP" 2>/dev/null)" ]; then
+  emit STATUS not-empty
+  emit MOUNTPOINT "$MP"
+  note "Refusing to mount onto non-empty dir: $MP"
+  note "Start Claude Code in a fresh EMPTY directory dedicated to this project and mount there,"
+  note "or pass --force to override (will hide the current contents while mounted)."
+  exit 4
+fi
+
+err="$(mktemp)"
+# reconnect + keepalives so brief tunnel hiccups self-heal; idmap=user so files look ours.
+if sshfs "$ALIAS:$RPATH" "$MP" \
+     -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks,idmap=user 2>"$err"; then
+  emit STATUS mounted
+  emit MOUNTPOINT "$MP"
+  emit REMOTE "$ALIAS:$RPATH"
+  [ -d "$MP/.git" ] && emit GIT_BRANCH "$(git -C "$MP" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '-')"
+  # Claude Code reads CLAUDE.md, not AGENTS.md — flag if the project ships only AGENTS.md.
+  [ -f "$MP/AGENTS.md" ] && [ ! -e "$MP/CLAUDE.md" ] && emit AGENTS_MD_ONLY 1
+else
+  emit STATUS failed
+  emit ERROR "$(tr '\n' ' ' < "$err" 2>/dev/null | sed 's/  */ /g' | cut -c1-300)"
+fi
+rm -f "$err" 2>/dev/null || true
