@@ -7,10 +7,17 @@ set -uo pipefail
 emit() { printf '%s=%s\n' "$1" "$2"; }
 note() { printf '%s\n' "$*" >&2; }
 
-# Sorted, unique list of TCP ports currently being listened on (any address).
+# Raw "local address" column of every listening TCP socket, across environments:
+# ss (iproute2) → netstat (GNU or BSD/macOS) → lsof. Tolerates both `host:PORT` and BSD `host.PORT`.
+listening_addrs() {
+  if   command -v ss      >/dev/null 2>&1; then ss -tlnH 2>/dev/null | awk '{print $4}'
+  elif command -v netstat >/dev/null 2>&1; then netstat -an 2>/dev/null | awk '/^tcp/ && /LISTEN/{print $4}'
+  elif command -v lsof    >/dev/null 2>&1; then lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print $9}'
+  fi
+}
+# Sorted, unique list of listening TCP port numbers (any address).
 listening_ports() {
-  { ss -tlnH 2>/dev/null || netstat -tlnH 2>/dev/null; } \
-    | awk '{print $4}' | sed -E 's/.*:([0-9]+)$/\1/' | grep -E '^[0-9]+$' | sort -un
+  listening_addrs | sed -E 's/.*[:.]([0-9]+)$/\1/' | grep -E '^[0-9]+$' | sort -un
 }
 port_in_use() { listening_ports | grep -qx "$1"; }
 
@@ -34,22 +41,39 @@ emit REMOTE_USER "$(id -un 2>/dev/null || whoami 2>/dev/null || echo unknown)"
 if grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null; then emit IS_WSL 1; else emit IS_WSL 0; fi
 
 # --- Ephemeral port floor (pick a fixed tunnel port BELOW this) ------------
-low=$(awk '{print $1}' /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null)
+low=$(awk '{print $1}' /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null)         # Linux
+[ -z "$low" ] && low=$(sysctl -n net.inet.ip.portrange.first 2>/dev/null)          # macOS/BSD
 low=${low:-32768}
 emit EPHEMERAL_LOW "$low"
 
-# --- Suggest a free, distinctive port below the ephemeral floor ------------
+# --- Suggest a port: prefer a FREE high port ending in "22" (below the -----
+# --- ephemeral floor, distinctive & ssh-mnemonic); else any free high port -
+# --- (the fallback is virtually never needed). -----------------------------
+inuse_ports="$(listening_ports)"
+free_port() { ! printf '%s\n' "$inuse_ports" | grep -qx "$1"; }
 suggested=""
-for p in 29222 27022 22022 31822 23922 25022 21022; do
-  if [ "$p" -lt "$low" ] && ! port_in_use "$p"; then suggested="$p"; break; fi
+hi=$(( low - 1 )); lobound=2000; [ "$lobound" -ge "$low" ] && lobound=1025
+# pass 1: highest free port whose last two digits are "22"
+p=$(( (hi / 100) * 100 + 22 )); [ "$p" -gt "$hi" ] && p=$(( p - 100 ))
+while [ "$p" -ge "$lobound" ]; do
+  free_port "$p" && { suggested="$p"; break; }
+  p=$(( p - 100 ))
 done
+# pass 2 (fallback): highest free port, any ending
+if [ -z "$suggested" ]; then
+  p="$hi"
+  while [ "$p" -ge "$lobound" ]; do
+    free_port "$p" && { suggested="$p"; break; }
+    p=$(( p - 1 ))
+  done
+fi
 emit SUGGESTED_PORT "$suggested"
 
 # --- Existing loopback listeners (possible prior tunnels) ------------------
-existing=$({ ss -tlnH 2>/dev/null || true; } \
-  | awk '$4 ~ /^(127\.0\.0\.1|\[::1\]):/ {print $4}' \
-  | sed -E 's/.*:([0-9]+)$/\1/' | sort -un \
-  | awk '$1>1024 && $1<32768' | paste -sd, -)
+existing=$(listening_addrs \
+  | grep -E '127\.0\.0\.1[:.]|\[::1\][:.]|::1\.' \
+  | sed -E 's/.*[:.]([0-9]+)$/\1/' | grep -E '^[0-9]+$' | sort -un \
+  | awk -v lo="$low" '$1>1024 && $1<lo' | paste -sd, -)
 emit EXISTING_LOOPBACK_PORTS "${existing:-}"
 
 # --- SSH keys on this box (used to authenticate BACK to the laptop) --------

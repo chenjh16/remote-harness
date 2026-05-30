@@ -43,7 +43,9 @@ if [ -z "$IDENTITY" ] && [ "$GEN_KEY" = 1 ]; then
 fi
 
 # --- ephemeral-floor sanity check ------------------------------------------
-low=$(awk '{print $1}' /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null); low=${low:-32768}
+low=$(awk '{print $1}' /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null)         # Linux
+[ -z "$low" ] && low=$(sysctl -n net.inet.ip.portrange.first 2>/dev/null)          # macOS/BSD
+low=${low:-32768}
 if [ "$PORT" -ge "$low" ]; then
   note "WARNING: port $PORT is within the ephemeral range (>= $low); it may occasionally"
   note "         collide with an outbound connection. A fixed port below $low is safer."
@@ -75,8 +77,10 @@ awk -v b="$BEGIN" -v e="$END" '
   printf '    ServerAliveInterval 30\n'
   printf '    ServerAliveCountMax 3\n'
   # Multiplex: keep one warm connection so repeated ssh / sshfs to the laptop are snappy.
+  # %C (a hash of conn params) keeps the socket path short — a literal %r@%h:%p can exceed the
+  # ~104-char unix-socket limit on macOS and fail with "ControlPath too long".
   printf '    ControlMaster auto\n'
-  printf '    ControlPath ~/.ssh/cm-%%r@%%h:%%p\n'
+  printf '    ControlPath ~/.ssh/cm-%%C\n'
   printf '    ControlPersist 5m\n'
   printf '%s\n' "$END"
 } > "$CFG"
@@ -91,6 +95,9 @@ emit KNOWN_HOSTS "$KH"
 emit REMOTEFORWARD_LINE "RemoteForward $PORT 127.0.0.1:22"
 if [ -n "$IDENTITY" ] && [ -f "$IDENTITY.pub" ]; then
   emit PUBKEY "$(cat "$IDENTITY.pub")"
+  # Stash the pubkey where laptop-setup.sh can fetch it over ssh (`ssh <box> cat ...`).
+  RH_HOME="${RH_HOME:-$HOME/.remote-harness}"; mkdir -p "$RH_HOME" 2>/dev/null || true
+  cp "$IDENTITY.pub" "$RH_HOME/.tunnel-pubkey" 2>/dev/null || true
 else
   emit PUBKEY ""
   note "No identity public key available; the laptop must already trust this box's key,"

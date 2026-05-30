@@ -17,6 +17,19 @@ SCRIPTS="$RH/scripts"; [ -x "$SCRIPTS/check-tunnel.sh" ] || SCRIPTS="$(cd "$(dir
 emit(){ printf '%s=%s\n' "$1" "$2"; }
 blocked(){ emit PREFLIGHT blocked; emit BLOCKED_STEP "$1"; emit ERROR "$2"; emit REMEDY "$3"; exit 0; }
 
+OS="$(uname -s 2>/dev/null || echo unknown)"
+sshfs_install_hint(){   # the right install command for THIS box's OS / package manager
+  case "$OS" in
+    Darwin) printf 'brew install macfuse && brew install gromgit/fuse/sshfs-mac';;
+    *) if   command -v apt-get >/dev/null 2>&1; then printf 'sudo apt-get install -y sshfs'
+       elif command -v dnf     >/dev/null 2>&1; then printf 'sudo dnf install -y fuse-sshfs'
+       elif command -v pacman  >/dev/null 2>&1; then printf 'sudo pacman -S --noconfirm sshfs'
+       elif command -v zypper  >/dev/null 2>&1; then printf 'sudo zypper install -y sshfs'
+       elif command -v apk     >/dev/null 2>&1; then printf 'sudo apk add sshfs'
+       else printf "install 'sshfs' with your package manager"; fi;;
+  esac
+}
+
 PREF_ALIAS="" PROJECT_DIR="$PWD" NO_LIST=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -64,21 +77,23 @@ emit LAPTOP_HOSTNAME "$LHOST"; emit LAPTOP_USER "$LUSER"
 # ---- Step: sshfs + FUSE ----------------------------------------------------
 command -v sshfs >/dev/null 2>&1 || blocked sshfs \
   "sshfs is not installed on this box." \
-  "Run (needs sudo): sudo apt-get install -y sshfs"
+  "Run: $(sshfs_install_hint)"
 emit SSHFS ok
-[ -e /dev/fuse ] || blocked sshfs \
-  "/dev/fuse is missing (FUSE not available)." \
-  "Install/enable FUSE (e.g. install 'fuse3'; on WSL ensure the kernel exposes /dev/fuse)."
+# /dev/fuse is a Linux concept; macOS (macFUSE) has no such device, so only check off-Darwin.
+if [ "$OS" != Darwin ] && [ ! -e /dev/fuse ]; then
+  blocked sshfs \
+    "/dev/fuse is missing (FUSE not available)." \
+    "Install/enable FUSE (e.g. install 'fuse3'; on WSL ensure the kernel exposes /dev/fuse)."
+fi
 emit FUSE ok
 
-# ---- Step: empty project dir ----------------------------------------------
+# ---- Step: project dir note (informational — laptop-setup.sh manages the mountpoint) ---
 if [ -n "$(ls -A "$PROJECT_DIR" 2>/dev/null)" ]; then
   emit PROJECT_DIR_EMPTY 0
-  blocked project-dir \
-    "Project dir is NOT empty: $PROJECT_DIR (mounting would hide its contents)." \
-    "Launch Claude Code in a fresh EMPTY dir for this project (mkdir -p ~/work/<name> && cd ~/work/<name> && claude), then re-run."
+  emit PROJECT_DIR_NOTE "cwd is not empty — in the new flow that is fine; laptop-setup.sh creates the remote mountpoint automatically"
+else
+  emit PROJECT_DIR_EMPTY 1
 fi
-emit PROJECT_DIR_EMPTY 1
 
 # ---- All clear -------------------------------------------------------------
 emit PREFLIGHT ok

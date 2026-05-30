@@ -64,9 +64,11 @@ core; removing a single agent leaves the core for the others.
 | Codex       | `~/.codex/prompts/remote-harness.md`                | `/remote-harness`|
 | opencode    | `~/.config/opencode/command/remote-harness.md`      | `/remote-harness`|
 
-All launchers point at the one shared `~/.remote-harness/SKILL.md` (single source of truth,
-one copy of the scripts). Only Claude Code has a native *skill* type; for Codex the same
-`/remote-harness` is a custom prompt, for opencode a custom command — the equivalent entry point.
+The **scripts** are the single shared source of truth: every agent calls `~/.remote-harness/scripts/*`
+(via `$RH_HOME`). The per-agent entry file differs by what each tool supports — Claude Code has a
+native *skill* (its own copy of `SKILL.md`), while the Codex prompt and opencode command are thin
+adapters that tell the agent to read the shared `~/.remote-harness/SKILL.md`. All are invoked as
+`/remote-harness`.
 
 ## Usage
 
@@ -75,14 +77,20 @@ prompt for decisions):
 
 1. Run a **one-shot preflight** (environment, tunnel, sshfs/FUSE, empty project dir) — it stops
    at the first blocker with a detailed remedy, or returns the candidate dirs if all is ready.
-2. If needed, set up the reverse tunnel: print the laptop-side `RemoteForward` line + the
-   public key to trust, walk you through reconnecting, and verify it end-to-end.
-3. Pick from a list of your laptop's project directories — or type a path, clone a repo, or
-   create a new dir on the laptop.
-4. sshfs-mount it onto your **empty** project dir (the dir you launched Claude Code in), then
-   restart Claude Code there so the project's CLAUDE.md/AGENTS.md and .claude settings load.
+2. If needed, set up the reverse tunnel: it **asks (with guesses) how you ssh into the box**, then
+   hands you a **short, backslash-continued copy-paste command** for your laptop (no editing, no
+   long lines the terminal could wrap and corrupt) that auto-detects macOS/Linux/WSL, ensures an
+   SSH server, authorizes the key, and adds the `RemoteForward` — creating a tidy `<user>-remote`
+   alias if you don't already have one. It then asks whether it worked (or what broke) and
+   verifies end-to-end before moving on.
+3. On your laptop, the one command prompts for the **project dir** (a readline prompt that defaults
+   to the current dir; press Enter to accept, or type/​create another path).
+4. sshfs-mounts it onto an **empty** box dir (your invoking cwd if empty, else `~/work/<project>`)
+   and **auto-launches** the agent there (no manual restart) — so the project's CLAUDE.md/AGENTS.md
+   load in a fresh session.
 
-Re-run any time to re-verify / remount; everything is idempotent.
+Re-run any time to re-verify / remount; everything is idempotent (a stale mount from a dropped
+tunnel is detected and replaced on the next run).
 
 ## Files
 
@@ -96,11 +104,35 @@ remote-harness/
 └── scripts/                 # deterministic logic (KEY=VALUE stdout), agent-agnostic
     ├── preflight.sh         # ONE-SHOT prereq check (env+tunnel+sshfs+empty dir) → ok / blocked
     ├── detect.sh            # read-only environment probe
-    ├── setup-tunnel.sh      # write remote ssh alias; emit laptop RemoteForward line
+    ├── setup-tunnel.sh      # write remote ssh alias; emit laptop RemoteForward line + pubkey
+    ├── connect-guesses.sh   # guess how the laptop connects (for the Step-1 confirm prompt)
+    ├── box-identity.sh      # box identity anchors (host-key fps) — laptop-setup inference fallback
+    ├── laptop-setup.sh      # RUNS ON LAPTOP: one-shot setup (--host given, or infers as fallback)
     ├── check-tunnel.sh      # verify listener + real ssh login through the tunnel
     ├── list-projects.sh     # list candidate dirs (--via <alias> => scan the laptop)
-    └── mount-project.sh     # sshfs-mount a laptop dir onto your (empty) project dir / --unmount
+    ├── mount-project.sh     # sshfs-mount a laptop dir onto your (empty) project dir / --unmount
+    └── inject-rule.sh       # RUNS ON BOX: per-session "run builds/tests on the laptop" rule (+opencode yolo)
 ```
+
+## The mounted-code rule
+
+The agent runs on the box but the code is an sshfs mount of your laptop, so the box often lacks
+the project's toolchain — and anything written into the mount (node_modules, .venv, target/…) goes
+back to the laptop and may be built for the wrong OS/arch. Before launch, `inject-rule.sh on` builds
+**per-session** artifacts on the box and points only this launch at them — **scoped to this session,
+never global and never in the mounted repo**, so other projects running on the same box are
+unaffected:
+
+| agent | channel (session-scoped) |
+|-------|--------------------------|
+| claude   | `--append-system-prompt-file <rule>` (session flag) |
+| opencode | `OPENCODE_CONFIG=<session config>` (instructions; + `permission:"allow"` when `--yolo`) |
+| codex    | `CODEX_HOME=<session home>` (your real auth/config symlinked; our `AGENTS.md` as global guidance) |
+
+The rule tells the agent to run builds, tests, linters, **and dependency installs** on the laptop
+via `ssh <box-alias> 'cd <laptop-path> && <cmd>'`, warns **not** to install/build on the box, and
+lists stack-tailored example commands (npm/pnpm/cargo/go/pytest/make…) sniffed from the project's
+manifests. On exit `inject-rule.sh off` just removes the session dir — nothing to restore.
 
 ## Doing it by hand (reference)
 
@@ -124,8 +156,8 @@ Host laptop
     UserKnownHostsFile ~/.ssh/known_hosts_laptop
     StrictHostKeyChecking accept-new
     ControlMaster auto                       # multiplex: keep one warm connection so
-    ControlPath ~/.ssh/cm-%r@%h:%p           # repeated ssh / sshfs to the laptop are
-    ControlPersist 5m                        # snappy
+    ControlPath ~/.ssh/cm-%C                  # repeated ssh / sshfs to the laptop are snappy
+    ControlPersist 5m                        # (%C is a short hash — avoids macOS's socket-path limit)
 ```
 
 ```bash
@@ -139,9 +171,10 @@ claude                                         # launch in the mount → its CLA
 # when done:  fusermount -u ~/work/myproj
 ```
 
-Pick a fixed tunnel port **below** the ephemeral range (`cat
-/proc/sys/net/ipv4/ip_local_port_range`) and **different from your login port**. On the laptop,
-fully reconnect (kill any multiplexed master with `ssh -O exit my-remote-box` first).
+Pick a tunnel port **below** the ephemeral range (`cat /proc/sys/net/ipv4/ip_local_port_range`)
+and **different from your login port** — the skill auto-selects the highest free port ending in
+`22` (e.g. 32722). On the laptop, fully reconnect (kill any multiplexed master with
+`ssh -O exit my-remote-box` first).
 
 ## Troubleshooting
 
