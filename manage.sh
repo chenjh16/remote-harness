@@ -66,7 +66,12 @@ echo "  source: $SRC"
 
 mkdir -p "$RH_HOME"
 place_file "$SRC/SKILL.md" "$RH_HOME/SKILL.md"
+place_file "$SRC/SKILL.cn.md" "$RH_HOME/SKILL.cn.md"
 place_scripts "$RH_HOME/scripts"
+# reference docs, read on demand at runtime via $RH/reference/*.md (incl. *.cn.md)
+rm -rf "$RH_HOME/reference"
+if [ "$MODE" = dev ]; then ln -s "$SRC/reference" "$RH_HOME/reference"
+else mkdir -p "$RH_HOME/reference"; cp "$SRC"/reference/*.md "$RH_HOME/reference"/; fi
 echo "  ✓ core ($MODE) → $RH_HOME"
 
 if want claude; then
@@ -85,4 +90,5 @@ fi
 
 echo
 [ "$MODE" = dev ] && echo "DEV install: edits in $SRC are live immediately." || true
-echo "Done. On the remote dev box, inside your coding agent, run:  /remote-harness"
+echo "Done. Inside your coding agent (on the remote box OR locally), run:  /remote-harness"
+echo "  reverse: agent on a remote box, code on your laptop  |  forward: agent local, code on a remote server"

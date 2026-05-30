@@ -5,7 +5,12 @@
 # STOPS at the first blocker with a detailed ERROR + REMEDY, and (when all pass) also lists the
 # laptop's candidate project dirs so the agent can go straight to directory selection.
 #
-#   preflight.sh [--alias <preferred>] [--project-dir <dir>] [--no-list]
+#   preflight.sh [--alias <preferred>] [--project-dir <dir>] [--no-list]          # reverse (default)
+#   preflight.sh --direction forward [--server '<ssh-args|alias>'] [--no-list]     # forward
+#
+# reverse: gate = a working reverse tunnel + local sshfs/FUSE; lists the laptop's projects.
+# forward: gate = local sshfs/FUSE (+ server reachability if --server given); lists the server's
+#          projects. Both emit DIRECTION and PROJECT_DIR_EMPTY.
 #
 # Output: KEY=VALUE on stdout. PREFLIGHT=ok|blocked. When blocked: BLOCKED_STEP + ERROR + REMEDY.
 # When ok and listing: a line "---PROJECTS---" followed by list-projects.sh output.
@@ -18,9 +23,9 @@ emit(){ printf '%s=%s\n' "$1" "$2"; }
 blocked(){ emit PREFLIGHT blocked; emit BLOCKED_STEP "$1"; emit ERROR "$2"; emit REMEDY "$3"; exit 0; }
 
 OS="$(uname -s 2>/dev/null || echo unknown)"
-sshfs_install_hint(){   # the right install command for THIS box's OS / package manager
+sshfs_install_hint(){   # the right install command for THIS machine's OS / package manager
   case "$OS" in
-    Darwin) printf 'brew install macfuse && brew install gromgit/fuse/sshfs-mac';;
+    Darwin) printf 'brew install macos-fuse-t/homebrew-cask/fuse-t && brew install macos-fuse-t/homebrew-cask/sshfs-fuse-t  (no kernel extension / no reduced security)';;
     *) if   command -v apt-get >/dev/null 2>&1; then printf 'sudo apt-get install -y sshfs'
        elif command -v dnf     >/dev/null 2>&1; then printf 'sudo dnf install -y fuse-sshfs'
        elif command -v pacman  >/dev/null 2>&1; then printf 'sudo pacman -S --noconfirm sshfs'
@@ -29,19 +34,62 @@ sshfs_install_hint(){   # the right install command for THIS box's OS / package 
        else printf "install 'sshfs' with your package manager"; fi;;
   esac
 }
+check_sshfs_fuse(){     # blocks on missing sshfs/FUSE; emits SSHFS/FUSE ok. Checks THIS machine.
+  # Accept plain sshfs OR the macOS no-kext FUSE-T build (may install as sshfs-fuse-t).
+  command -v sshfs >/dev/null 2>&1 || command -v sshfs-fuse-t >/dev/null 2>&1 || blocked sshfs \
+    "sshfs is not installed on this machine." \
+    "Run: $(sshfs_install_hint)"
+  emit SSHFS ok
+  # /dev/fuse is a Linux concept; macOS (macFUSE/FUSE-T) has no such device, so only check off-Darwin.
+  if [ "$OS" != Darwin ] && [ ! -e /dev/fuse ]; then
+    blocked sshfs "/dev/fuse is missing (FUSE not available)." \
+      "Install/enable FUSE (e.g. install 'fuse3'; on WSL ensure the kernel exposes /dev/fuse)."
+  fi
+  emit FUSE ok
+}
 
-PREF_ALIAS="" PROJECT_DIR="$PWD" NO_LIST=0
+PREF_ALIAS="" PROJECT_DIR="$PWD" NO_LIST=0 DIRECTION=reverse SERVER=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --alias)       PREF_ALIAS="$2"; shift 2;;
     --project-dir) PROJECT_DIR="$2"; shift 2;;
     --no-list)     NO_LIST=1; shift;;
+    --direction)   DIRECTION="$2"; shift 2;;   # reverse (default) | forward
+    --server)      SERVER="$2"; shift 2;;      # forward: ssh args/alias to the project server
     *) shift;;
   esac
 done
 
 emit PROJECT_DIR "$PROJECT_DIR"
 [ -n "${SSH_CONNECTION:-}" ] && emit ON_REMOTE 1 || emit ON_REMOTE 0
+
+# ============================================================================
+# FORWARD direction: local agent → project on a directly ssh-reachable server.
+# No reverse tunnel; the gate is LOCAL sshfs/FUSE (+ server reachability if known).
+# ============================================================================
+if [ "$DIRECTION" = forward ]; then
+  emit DIRECTION forward
+  check_sshfs_fuse                                  # checks THIS (local) machine
+  if [ -n "$SERVER" ]; then
+    # $SERVER unquoted so raw args ("-p 2222 user@host") word-split; a bare alias is one word.
+    if ssh -o BatchMode=yes -o ConnectTimeout=8 $SERVER true 2>/dev/null; then
+      emit SERVER_REACHABLE 1
+    else
+      emit SERVER_REACHABLE 0
+      emit SERVER_NOTE "couldn't key-auth to the server non-interactively (sshfs/builds may prompt for a password — set up an ssh key)"
+    fi
+  fi
+  # Does the local invoking cwd work as the mountpoint, or fall back to ~/remote-harness-mounts/<name>?
+  if [ -n "$(ls -A "$PROJECT_DIR" 2>/dev/null)" ]; then emit PROJECT_DIR_EMPTY 0
+  else emit PROJECT_DIR_EMPTY 1; fi
+  emit PREFLIGHT ok
+  if [ "$NO_LIST" != 1 ] && [ -n "$SERVER" ]; then
+    echo "---PROJECTS---"
+    "$SCRIPTS/list-projects.sh" --via "$SERVER"
+  fi
+  exit 0
+fi
+emit DIRECTION reverse
 
 # ---- Step: reverse tunnel (the core gate) ----------------------------------
 aliases=""
@@ -74,18 +122,8 @@ done
 emit TUNNEL_ALIAS "$OK_ALIAS"; emit TUNNEL_PORT "$OK_PORT"
 emit LAPTOP_HOSTNAME "$LHOST"; emit LAPTOP_USER "$LUSER"
 
-# ---- Step: sshfs + FUSE ----------------------------------------------------
-command -v sshfs >/dev/null 2>&1 || blocked sshfs \
-  "sshfs is not installed on this box." \
-  "Run: $(sshfs_install_hint)"
-emit SSHFS ok
-# /dev/fuse is a Linux concept; macOS (macFUSE) has no such device, so only check off-Darwin.
-if [ "$OS" != Darwin ] && [ ! -e /dev/fuse ]; then
-  blocked sshfs \
-    "/dev/fuse is missing (FUSE not available)." \
-    "Install/enable FUSE (e.g. install 'fuse3'; on WSL ensure the kernel exposes /dev/fuse)."
-fi
-emit FUSE ok
+# ---- Step: sshfs + FUSE (on this box) --------------------------------------
+check_sshfs_fuse
 
 # ---- Step: project dir note (informational — laptop-setup.sh manages the mountpoint) ---
 if [ -n "$(ls -A "$PROJECT_DIR" 2>/dev/null)" ]; then

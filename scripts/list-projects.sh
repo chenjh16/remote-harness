@@ -63,7 +63,9 @@ rm -f "$tmp" 2>/dev/null || true
 '
 
 if [ -n "$VIA" ]; then
-  printf '%s' "$SCAN" | ssh -o BatchMode=yes -o ConnectTimeout=10 "$VIA" \
+  # $VIA is unquoted so a raw connect string ("-p 2222 user@host") word-splits into ssh args;
+  # a bare alias is just one word. (Same convention as the setup scripts.)
+  printf '%s' "$SCAN" | ssh -o BatchMode=yes -o ConnectTimeout=10 $VIA \
     "RH_LIMIT=$LIMIT RH_ROOTS='$roots_args' sh -s"
 else
   printf '%s' "$SCAN" | RH_LIMIT="$LIMIT" RH_ROOTS="$roots_args" sh -s

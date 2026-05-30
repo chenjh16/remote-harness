@@ -6,12 +6,15 @@
 #   Phase 2 — Reconnect automatically (establishes the reverse tunnel)
 #   Phase 3 — Pick a project dir on THIS laptop (readline prompt, defaults to cwd)
 #   Phase 4 — Mount the chosen dir on the remote box via sshfs (over the tunnel)
-#   Phase 5 — Launch Claude Code on the remote box in the mounted dir (ssh -t)
+#   Phase 5 — Launch the chosen agent (claude/codex/opencode) on the box in the mounted dir (ssh -t)
 #
-# Usage (emitted by the skill — paste as-is, no editing):
-#   ssh <CONNECT> 'cat ~/.remote-harness/scripts/laptop-setup.sh' > /tmp/rh.sh \
-#     && bash /tmp/rh.sh --host <HOST> --port <PORT> \
-#          --via '<CONNECT>' --box-alias <ALIAS>
+# Usage (emitted by the skill — paste as-is). This script sources _common.sh from beside it, so the
+# command fetches BOTH files into one temp dir (the laptop usually has no install):
+#   d=$(mktemp -d "${TMPDIR:-/tmp}/rh.XXXXXX") \
+#     && ssh <CONNECT> 'cat ~/.remote-harness/scripts/_common.sh'      >"$d/_common.sh" \
+#     && ssh <CONNECT> 'cat ~/.remote-harness/scripts/laptop-setup.sh' >"$d/laptop-setup.sh" \
+#     && bash "$d/laptop-setup.sh" --host <HOST> --port <PORT> --via '<CONNECT>' --box-alias <ALIAS>
+#     ; rm -rf "$d"
 #
 # Flags:
 #   --host <alias|ip>     ssh Host block to write/update (required)
@@ -20,10 +23,9 @@
 #   --box-alias <name>    alias the BOX uses to reach back to this laptop (default: <user>-mac)
 #   --pubkey <key>        box public key to authorize (fetched via --via if omitted)
 #   --box-user <user>     remote box username (for mount path and alias naming)
-#   --box-hostname <h>    remote box hostname (for Host block naming)
-#   --box-fp <fp>         box SSH host-key fingerprint (repeatable; for inference fallback)
 #   --remote-mountpoint <d>  exact box dir to mount the project at (must be empty;
 #                            default: <remote $HOME>/work/<project-name>)
+#   --project-dir <d>     laptop project dir to mount (skips Phase 3's interactive prompt)
 #   --launch <cmd>        coding-agent CLI to start on the remote (default: claude;
 #                         Codex passes 'codex', opencode passes 'opencode')
 #   --yolo                bypass approvals on the launched agent — claude/codex get their
@@ -34,7 +36,7 @@ set -uo pipefail
 
 # ---- argument parsing -----------------------------------------------------
 HOST="" PORT="" PUBKEY="" VIA="" BOX_ALIAS="" ASSUME_YES=0 SETUP_ONLY=0
-BOX_HOSTNAME="" BOX_USER="" BOX_FPS="" REMOTE_MP="" LAUNCH="claude"
+BOX_USER="" REMOTE_MP="" LAUNCH="claude" PROJ_DIR_ARG=""
 YOLO=0; EFF_LAUNCH=""; LAUNCH_BASE="claude"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -45,11 +47,9 @@ while [ $# -gt 0 ]; do
     --launch)        LAUNCH="$2";         shift 2;;   # CLI to start on the remote (claude/codex/opencode)
     --yolo)          YOLO=1;              shift;;     # bypass approvals on the launched agent
     --box-alias)     BOX_ALIAS="$2";      shift 2;;
-    --box-hostname)  BOX_HOSTNAME="$2";   shift 2;;
     --box-user)      BOX_USER="$2";       shift 2;;
-    --box-fp)        BOX_FPS="$BOX_FPS${BOX_FPS:+
-}$2";                                     shift 2;;
     --remote-mountpoint) REMOTE_MP="$2";  shift 2;;   # exact box dir to mount at (e.g. your invoking cwd)
+    --project-dir)   PROJ_DIR_ARG="$2";   shift 2;;   # laptop project dir (skip the interactive prompt)
     --setup-only)    SETUP_ONLY=1;        shift;;
     --yes|-y)        ASSUME_YES=1;        shift;;
     *) printf 'unknown arg: %s\n' "$1" >&2; exit 2;;
@@ -58,37 +58,12 @@ done
 [ -n "$PORT" ] || { printf 'need --port\n' >&2; exit 2; }
 printf '%s' "$PORT" | grep -qE '^[0-9]+$' || { printf 'port must be numeric: %s\n' "$PORT" >&2; exit 2; }
 
-# ---- colors (ANSI, only when stdout is a real terminal) --------------------
-if [ -t 1 ] && command -v tput >/dev/null 2>&1 && tput colors >/dev/null 2>&1 \
-     && [ "$(tput colors 2>/dev/null)" -ge 8 ]; then
-  _B=$(tput bold 2>/dev/null)     # bold
-  _G=$(tput setaf 2 2>/dev/null)  # green
-  _Y=$(tput setaf 3 2>/dev/null)  # yellow
-  _C=$(tput setaf 6 2>/dev/null)  # cyan
-  _R=$(tput setaf 1 2>/dev/null)  # red
-  _D=$(tput setaf 4 2>/dev/null)  # dim blue (for headers)
-  _0=$(tput sgr0 2>/dev/null)     # reset
-else
-  _B="" _G="" _Y="" _C="" _R="" _D="" _0=""
-fi
-
-# ---- helpers ---------------------------------------------------------------
-say()  { printf '%s\n' "$*"; }
-ok()   { printf "  ${_G}✓${_0} %s\n" "$*"; }
-warn() { printf "  ${_Y}⚠${_0} %s\n" "$*"; }
-err()  { printf "  ${_R}✗${_0} %s\n" "$*" >&2; }
-hdr()  { printf "\n${_B}${_D}── %s${_0}\n" "$*"; }
-sep()  { printf '\n'; }
-ask() {
-  [ "$ASSUME_YES" = 1 ] && return 0
-  printf "${_Y}?${_0} %s [y/N] " "$1" >/dev/tty
-  local a=""; read -r a </dev/tty || true
-  case "$a" in y|Y|yes|YES) return 0;; *) return 1;; esac
-}
-# Shell-quote a value for SAFE interpolation into a remote command string: wrap in single quotes,
-# escaping any embedded single quote as '\''. Prevents paths with apostrophes (legal on macOS) from
-# breaking — or injecting into — the box-side commands we build below.
-sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+# ---- shared helpers (colors, say/ok/warn/err/hdr/ask, sq, OS vars, parse_via, ssh-config) -------
+# laptop-setup.sh is fetched to the laptop and run STANDALONE (the laptop usually has no install),
+# so the skill's one-command fetches _common.sh next to this file and we source it by path.
+RH_COMMON="${RH_COMMON:-$(dirname "$0")/_common.sh}"
+if [ -f "$RH_COMMON" ]; then . "$RH_COMMON"
+else printf 'error: missing _common.sh next to %s — re-copy the full command\n' "$0" >&2; exit 2; fi
 
 # ---- auto-cleanup on exit/disconnect ---------------------------------------
 TUNNEL_PID=""; MOUNTED=0; CLEANED=0; RULE_INJECTED=0
@@ -111,13 +86,7 @@ cleanup() {
   [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
 }
 
-# ---- OS detection ----------------------------------------------------------
-OS="$(uname -s 2>/dev/null || echo unknown)"; IS_WSL=0
-case "$OS" in
-  Darwin) PLAT=macos;;
-  Linux)  PLAT=linux; grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && IS_WSL=1;;
-  *)      PLAT=other;;
-esac
+# OS vars (OS/PLAT/IS_WSL) come from _common.sh.
 printf "\n${_B}remote-harness${_0} laptop setup  ${_C}port=%s${_0}  platform=%s\n\n" "$PORT" "$PLAT"
 
 # Resolve YOLO into the effective launch command per agent.
@@ -140,25 +109,8 @@ fi
 # Phase 1: SSH server, authorized key, RemoteForward in ~/.ssh/config
 # ===========================================================================
 
-# -- parse --via into parts (for later use) --
-V_HOST="" V_PORT="" V_USER="" V_IDENTITY=""
-if [ -n "$VIA" ]; then
-  set -- $VIA
-  # Strip leading "ssh" keyword if the user included the full command.
-  [ "$1" = "ssh" ] && shift
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      -p)  V_PORT="${2:-}"; shift 2 || shift;;
-      -p*) V_PORT="${1#-p}"; shift;;
-      -l)  V_USER="${2:-}"; shift 2 || shift;;
-      -i)  V_IDENTITY="${2:-}"; shift 2 || shift;;   # capture the key so the tunnel alias is non-interactive
-      -i*) V_IDENTITY="${1#-i}"; shift;;
-      -o|-F|-J|-b|-c|-m|-w|-D|-L|-R|-W|-E|-Q|-S) shift 2 || shift;;
-      -*)  shift;;
-      *)   if [ -z "$V_HOST" ]; then case "$1" in *@*) V_USER="${1%@*}"; V_HOST="${1##*@}";; *) V_HOST="$1";; esac; fi; shift;;
-    esac
-  done
-fi
+# -- parse --via into V_HOST/V_PORT/V_USER/V_IDENTITY (parse_via from _common.sh) --
+parse_via "$VIA"
 [ -z "$V_HOST" ] && [ -n "$HOST" ] && V_HOST="$HOST"
 [ -z "$BOX_USER" ] && BOX_USER="$V_USER"
 
@@ -222,15 +174,7 @@ fi
 
 # -- write RemoteForward to ~/.ssh/config --
 CFG="$HOME/.ssh/config"; touch "$CFG"; chmod 600 "$CFG" 2>/dev/null || true
-TARGET=""; REUSE=0
-block_exists() { awk -v h="$1" '/^[ \t]*[Hh][Oo][Ss][Tt][ \t]/{for(i=2;i<=NF;i++){if($i=="#")break;if($i==h)f=1}}END{exit !f}' "$CFG"; }
-# Drop the whole "Host <name>" block (Host line .. next Host / EOF) so we can rewrite it cleanly.
-remove_host_block() {
-  awk -v h="$1" '
-    function H(s){return s~/^[ \t]*[Hh][Oo][Ss][Tt][ \t]/}
-    H($0){drop=0;n=split($0,a,/[ \t]+/);for(i=2;i<=n;i++){if(a[i]=="#")break;if(a[i]==h)drop=1}}
-    drop!=1{print}' "$CFG" > "$CFG.rhtmp" && mv "$CFG.rhtmp" "$CFG"
-}
+TARGET=""; REUSE=0   # block_exists / remove_host_block / write_managed_alias come from _common.sh
 
 # The --via connection is the GROUND TRUTH for how to reach the box. If it carries an explicit
 # user or port (a raw connection like `-p 2222 user@ip`), reach the box through a DEDICATED managed
@@ -261,13 +205,11 @@ if [ "$REUSE" = 1 ]; then
   fi
 else
   # Create-or-replace a managed alias carrying the exact --via identity + RemoteForward (idempotent).
-  remove_host_block "$TARGET"
-  { printf '\nHost %s\n' "$TARGET"
-    [ -n "$V_HOST" ] && printf '    HostName %s\n' "$V_HOST"
-    [ -n "$V_PORT" ] && [ "$V_PORT" != 22 ] && printf '    Port %s\n' "$V_PORT"
-    [ -n "$V_USER" ] && printf '    User %s\n' "$V_USER"
-    [ -n "$V_IDENTITY" ] && printf '    IdentityFile %s\n' "$V_IDENTITY"
-    printf '%s\n' "$RF_LINE"; } >> "$CFG"
+  # Keepalives so a half-open tunnel (NAT idle / laptop sleep) is detected; ExitOnForwardFailure so a
+  # port-collision fails loudly instead of leaving a live-but-no-forward connection that polls as "up".
+  write_managed_alias "$TARGET" "$RF_LINE" \
+    "    ServerAliveInterval 30" "    ServerAliveCountMax 3" \
+    "    ExitOnForwardFailure yes" "    TCPKeepAlive yes"
   ok "ssh config: wrote managed 'Host $TARGET' (HostName ${V_HOST:-?}, port ${V_PORT:-22}, user ${V_USER:-<login default>}) + RemoteForward"
   say "    Reconnect to the box via: ${_B}ssh $TARGET${_0}"
 fi
@@ -344,7 +286,12 @@ pick_dir() {
   printf '%s' "$result"
 }
 
-PROJ_DIR="$(pick_dir)"
+# Use the agent-confirmed dir if it passed one (--project-dir); otherwise prompt interactively.
+if [ -n "$PROJ_DIR_ARG" ]; then
+  PROJ_DIR="${PROJ_DIR_ARG/#\~/$HOME}"; ok "Project dir (from skill): ${_B}${PROJ_DIR}${_0}"
+else
+  PROJ_DIR="$(pick_dir)"
+fi
 PROJ_DIR="${PROJ_DIR%/}"   # strip trailing slash
 
 if [ ! -d "$PROJ_DIR" ]; then
@@ -371,7 +318,8 @@ if [ -n "$REMOTE_MP" ]; then
 else
   REMOTE_MOUNTPOINT=$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" \
     "printf '%s/work/%s' \"\$HOME\" $(sq "$PROJ_NAME")" 2>/dev/null || true)
-  [ -z "$REMOTE_MOUNTPOINT" ] && REMOTE_MOUNTPOINT="/home/${BOX_USER:-box}/work/$PROJ_NAME"
+  # /home/<user> is wrong on macOS (/Users); fall back to a generic message rather than a bad path.
+  [ -z "$REMOTE_MOUNTPOINT" ] && { warn "could not resolve remote \$HOME; please pass --remote-mountpoint <empty-dir>"; exit 1; }
 fi
 
 # Mount, with interactive retry: a recoverable failure (sshfs missing / target not empty) loops

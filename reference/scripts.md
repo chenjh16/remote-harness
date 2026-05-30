@@ -1,0 +1,57 @@
+# Helper scripts (reference)
+
+All scripts live in `$RH/scripts/` where `RH="${RH_HOME:-$HOME/.remote-harness}"`. They print
+`KEY=VALUE` on stdout (parse that); human notes go to stderr.
+
+```bash
+RH="${RH_HOME:-$HOME/.remote-harness}"
+[ -d "$RH/scripts" ] || echo "scripts missing — run: manage.sh"
+```
+
+- `"$RH/scripts/preflight.sh"` — one-shot check; emits `PREFLIGHT=ok|blocked` + `BLOCKED_STEP`/
+  `ERROR`/`REMEDY` + `DIRECTION`. Reverse (default): checks the tunnel + local sshfs/FUSE. Forward:
+  `--direction forward [--server '<via>']` checks local sshfs/FUSE (+ server reachability) and lists
+  the server's projects. Run this first.
+- `"$RH/scripts/detect.sh"` — read-only probe: `SUGGESTED_PORT`, `LAPTOP_USER_GUESS`,
+  `DEFAULT_IDENTITY`, `SSHD_TCP_FORWARDING`, `ON_REMOTE`. Used when building the tunnel.
+- `"$RH/scripts/setup-tunnel.sh"` — (reverse) write the box-side `ssh` alias
+  (`BOX_ALIAS → 127.0.0.1:PORT`). Emits `ALIAS`, `PORT`, `PUBKEY`, `REMOTEFORWARD_LINE`. Idempotent.
+- `"$RH/scripts/connect-guesses.sh"` — (reverse) guess how the laptop reaches this box.
+- `"$RH/scripts/check-tunnel.sh"` — (reverse) verify listener + real ssh login through the tunnel.
+- `"$RH/scripts/server-guesses.sh"` — (forward) suggest OUTBOUND ssh targets (the project server)
+  from `~/.ssh/config` non-loopback aliases, known_hosts, and recent history. Prints `ssh <target>`
+  lines. The user's own answer is authoritative.
+- `"$RH/scripts/list-projects.sh"` — list candidate project dirs locally, or on a remote via
+  `--via '<ssh-args|alias>'` (used to enumerate the laptop's or server's projects). `PROJECT\t<path>…`.
+- `"$RH/scripts/mount-project.sh"` — sshfs-mount `<alias>:<remote-path>` onto a LOCAL mountpoint
+  (direction-agnostic). Refuses a non-empty target; revalidates/remounts a stale mount; `--unmount`
+  to detach. Emits `STATUS=mounted|already-mounted|need-sshfs|not-empty|failed|unmounted`.
+- `"$RH/scripts/local-setup.sh"` — **(forward) runs on the LOCAL machine**: resolves a stable ssh
+  alias to the server (managed alias from `--via` if raw), sshfs-mounts the server's project locally,
+  injects the run-on-server rule, and launches the agent locally in the mount; unmounts on exit.
+  Args: `--via '<ssh-args|alias>' --remote-path '<dir>' [--mountpoint '<dir>'] --launch <cli> [--yolo]`.
+- `"$RH/scripts/laptop-setup.sh"` — **(reverse) runs on the LAPTOP**: Phases 1-5 fully automated.
+  Phase 1: SSH server, authorized key, RemoteForward config. Phase 2: reconnect. Phase 3: pick
+  project dir (`--project-dir` to skip the prompt). Phase 4: sshfs mount on remote (retries
+  interactively on sshfs-missing / non-empty). Phase 5: inject the run-on-laptop rule, then launch
+  the chosen agent (`--launch`, default `claude`).
+- `"$RH/scripts/inject-rule.sh"` — **runs where the agent runs** (the box in reverse, the local
+  machine in forward), direction-NEUTRAL:
+  `on <agent> <code_path> <host_alias> <mountpoint> [yolo]` builds **per-session** artifacts under
+  `$RH_HOME/.sessions/<key>` and prints how to launch so ONLY this session reads the rule —
+  **nothing global, nothing in the mounted repo**. It prints `RH_STATUS`, `RH_LAUNCH_ENV`,
+  `RH_LAUNCH_FLAGS`:
+    - claude   → `RH_LAUNCH_FLAGS=--append-system-prompt-file <rule>` (session flag)
+    - opencode → `RH_LAUNCH_ENV=OPENCODE_CONFIG=<session cfg>` (instructions; +`permission:"allow"` if yolo)
+    - codex    → `RH_LAUNCH_ENV=CODEX_HOME=<session home>` (real auth/config symlinked; our `AGENTS.md`;
+      non-yolo also gets `RH_LAUNCH_FLAGS=-s workspace-write -c sandbox_workspace_write.network_access=true`
+      so the sandbox permits the rule's outbound ssh — `-s` is required, the sub-table is ignored at the
+      implicit default. Caveat: the default sandbox keeps `~/.ssh` read-only, so `/remote-harness yolo` is
+      most reliable for codex.)
+  The rule says the cwd is an sshfs mount of `<code_path>` on `<host_alias>` and to run
+  builds/tests/linters/installs/the app **on `<host_alias>`** via `ssh <host_alias> 'cd <code_path>
+  && <cmd>'` (never on "this machine"), with **stack-tailored example commands** sniffed from the
+  manifests. Both setup scripts splice `RH_LAUNCH_ENV`/`RH_LAUNCH_FLAGS` into the launch and call
+  `off <agent> <mountpoint>` (removes the session dir) on exit.
+- `"$RH/scripts/_common.sh"` — shared helpers sourced by both setup scripts (colors, `ask`, `sq`,
+  `parse_via`, `write_managed_alias`, OS vars). Not an entry point.

@@ -15,7 +15,7 @@ note() { printf '%s\n' "$*" >&2; }
 
 sshfs_install_hint(){   # the right install command for THIS box's OS / package manager
   case "$(uname -s 2>/dev/null)" in
-    Darwin) printf 'brew install macfuse && brew install gromgit/fuse/sshfs-mac';;
+    Darwin) printf 'brew install macos-fuse-t/homebrew-cask/fuse-t && brew install macos-fuse-t/homebrew-cask/sshfs-fuse-t  (no kernel extension / no reduced security)';;
     *) if   command -v apt-get >/dev/null 2>&1; then printf 'sudo apt-get install -y sshfs'
        elif command -v dnf     >/dev/null 2>&1; then printf 'sudo dnf install -y fuse-sshfs'
        elif command -v pacman  >/dev/null 2>&1; then printf 'sudo pacman -S --noconfirm sshfs'
@@ -41,6 +41,11 @@ done
 # Default mountpoint = current directory (the Claude Code project dir).
 [ -n "$MP" ] || MP="$PWD"
 
+OS="$(uname -s 2>/dev/null || echo unknown)"
+# The sshfs binary. On macOS the no-kext FUSE-T build (brew macos-fuse-t/homebrew-cask/sshfs-fuse-t)
+# may install as `sshfs` or `sshfs-fuse-t`; prefer plain `sshfs` if present.
+SSHFS_BIN=""; for c in sshfs sshfs-fuse-t; do command -v "$c" >/dev/null 2>&1 && { SSHFS_BIN="$c"; break; }; done
+
 is_mounted() {
   if command -v mountpoint >/dev/null 2>&1; then mountpoint -q "$1" && return 0; fi
   mount 2>/dev/null | grep -qF " $1 "
@@ -64,14 +69,17 @@ fi
 
 [ -n "$RPATH" ] || { note "need --remote-path"; exit 2; }
 
-if ! command -v sshfs >/dev/null 2>&1; then
+if [ -z "$SSHFS_BIN" ]; then
   emit STATUS need-sshfs; emit INSTALL_CMD "$(sshfs_install_hint)"
   note "sshfs is not installed. Install it once (the user runs the command above), then re-run."
   exit 3
 fi
 
 if is_mounted "$MP"; then
-  want="$ALIAS:$RPATH"; have="$(mounted_source "$MP")"
+  want="$ALIAS:$RPATH"; have=""
+  # On macOS/FUSE-T the mount source is an NFS loopback (not alias:path), so source-matching is
+  # unreliable there — fall back to liveness only.
+  [ "$OS" != Darwin ] && have="$(mounted_source "$MP")"
   # Reuse only a LIVE mount that points at the requested project; otherwise drop the stale/wrong
   # one and remount fresh (fixes the dropped-tunnel re-run that used to launch into a dead dir).
   if mount_live "$MP" && { [ -z "$have" ] || [ "$have" = "$want" ]; }; then
@@ -95,9 +103,13 @@ if [ "$FORCE" != 1 ] && [ -n "$(ls -A "$MP" 2>/dev/null)" ]; then
 fi
 
 err="$(mktemp)"
-# reconnect + keepalives so brief tunnel hiccups self-heal; idmap=user so files look ours.
-if sshfs "$ALIAS:$RPATH" "$MP" \
-     -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks,idmap=user 2>"$err"; then
+# reconnect + keepalives so brief tunnel hiccups self-heal. idmap=user (libfuse sshfs) maps the
+# remote uid → ours; omitted on macOS, where FUSE-T's sshfs mounts via NFS and doesn't accept it.
+case "$OS" in
+  Darwin) SSHFS_OPTS="reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks";;
+  *)      SSHFS_OPTS="reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks,idmap=user";;
+esac
+if "$SSHFS_BIN" "$ALIAS:$RPATH" "$MP" -o "$SSHFS_OPTS" 2>"$err"; then
   emit STATUS mounted
   emit MOUNTPOINT "$MP"
   emit REMOTE "$ALIAS:$RPATH"

@@ -39,14 +39,16 @@ detect_cmds() {
     [ -f "$m/yarn.lock" ]      && pm=yarn
     [ -f "$m/pnpm-lock.yaml" ] && pm=pnpm
     [ -f "$m/bun.lockb" ]      && pm=bun
-    printf '%s install\n%s run build\n%s test\n' "$pm" "$pm" "$pm"
+    printf '%s install\n%s run build\n%s test\n%s run lint\n%s run format\n' "$pm" "$pm" "$pm" "$pm" "$pm"
   elif [ -n "$m" ] && [ -f "$m/Cargo.toml" ]; then
-    printf 'cargo build\ncargo test\ncargo run\n'
+    printf 'cargo build\ncargo test\ncargo run\ncargo clippy\ncargo fmt --check\n'
   elif [ -n "$m" ] && [ -f "$m/go.mod" ]; then
-    printf 'go build ./...\ngo test ./...\n'
+    printf 'go build ./...\ngo test ./...\ngo vet ./...\ngofmt -l .\n'
   elif [ -n "$m" ] && { [ -f "$m/pyproject.toml" ] || [ -f "$m/requirements.txt" ] || [ -f "$m/setup.py" ]; }; then
     if [ -f "$m/requirements.txt" ]; then printf 'pip install -r requirements.txt\n'; else printf 'pip install -e .\n'; fi
     printf 'pytest\n'
+    [ -f "$m/.ruff.toml" ] || [ -f "$m/pyproject.toml" ] && printf 'ruff check .\n' || true
+    [ -f "$m/mypy.ini" ] || grep -qs '\[mypy\]' "$m/setup.cfg" "$m/pyproject.toml" 2>/dev/null && printf 'mypy .\n' || true
   elif [ -n "$m" ] && [ -f "$m/Gemfile" ]; then
     printf 'bundle install\nbundle exec rake test\n'
   elif [ -n "$m" ] && { [ -f "$m/Makefile" ] || [ -f "$m/makefile" ]; }; then
@@ -56,30 +58,35 @@ detect_cmds() {
   fi
 }
 
-write_rule() {  # $1=outfile  $2=laptop_path  $3=box_alias  $4=mountpoint
+write_rule() {  # $1=outfile  $2=code_path (on $3)  $3=host_alias (where code lives)  $4=mountpoint
   cmds="$(detect_cmds "$4")"
   lpq="$(printf '%s' "$2" | sed "s/'/'\\\\''/g")"   # path with single quotes escaped, for the 'cd ...' examples
   {
     printf '# IMPORTANT — Remote dev harness rule (READ BEFORE RUNNING ANY COMMAND)\n\n'
-    printf '**Your working directory is an sshfs mount of `%s` on the user'\''s laptop — this box is\n' "$2"
-    printf 'NOT the project'\''s runtime.** It may lack the toolchain, and ANYTHING you write into this\n'
-    printf 'dir (node_modules, .venv, target/, build output) is written back over the mount to the\n'
-    printf 'laptop and may be built for the WRONG OS/arch — silently corrupting the user'\''s environment.\n\n'
-    printf '**MANDATORY RULE — no exceptions:** run EVERY build, test, linter, formatter, type-check,\n'
-    printf 'dependency install, code generator, script, and the app itself **ON THE LAPTOP**, never on\n'
-    printf 'this box. Run them like this:\n\n'
+    printf '**Your working directory is an sshfs mount of `%s` on `%s` — this machine is NOT where\n' "$2" "$3"
+    printf 'the project runs.** It may lack the toolchain/runtime, and ANYTHING you write here\n'
+    printf '(node_modules, .venv, target/, build output) is written back over the mount to `%s` and\n' "$3"
+    printf 'may be built for the WRONG OS/arch — silently corrupting that environment.\n\n'
+    printf '**MANDATORY RULE — no exceptions:** run EVERY build, run/start, test, linter, formatter,\n'
+    printf 'type-check, language server, debugger, dependency install, code generator, DB migration,\n'
+    printf 'and `git commit`/`git push` (their hooks run the toolchain) — and ANY other project tool —\n'
+    printf '**on `%s`**, never on this machine. One-shot commands:\n\n' "$3"
     printf '    ssh %s '\''cd %s && <command>'\''\n\n' "$3" "$lpq"
     printf 'For this project, that means (for example):\n\n'
     printf '%s\n' "$cmds" | while IFS= read -r c; do
       [ -n "$c" ] && printf '    ssh %s '\''cd %s && %s'\''\n' "$3" "$lpq" "$c"
     done
     printf '\n'
-    printf '**NEVER run installs or builds locally on this box** (`npm install`, `pip install`,\n'
-    printf '`cargo build`, `make`, etc.) — it pollutes the mounted dir and corrupts the laptop'\''s\n'
-    printf 'dependencies with binaries built for this box'\''s OS/arch. The ONLY things safe to do\n'
-    printf 'locally are read-only: reading and editing files, `grep`, `git status` / `git diff`.\n'
-    printf 'If a command needs the toolchain, or a local build/test/run fails, do NOT try to work\n'
-    printf 'around it on this box — re-run it on the laptop via the `ssh %s ...` form above.\n' "$3"
+    printf 'For a long-running process (dev server, file watcher) allocate a TTY, and forward any port\n'
+    printf 'you need to reach locally:\n\n'
+    printf '    ssh -t -L 3000:127.0.0.1:3000 %s '\''cd %s && <dev server>'\''\n\n' "$3" "$lpq"
+    printf '**NEVER run installs/builds/tools on this machine** (`npm install`, `pip install`,\n'
+    printf '`cargo build`, `make`, a linter/formatter, a language server, etc.) — it pollutes the mount\n'
+    printf 'and corrupts `%s`'\''s deps with wrong-OS/arch binaries. The ONLY things safe to do locally\n' "$3"
+    printf 'are READ-ONLY: reading/editing files, `grep`, and read-only git (`git status`/`git diff`/`git log`).\n'
+    printf 'If a command needs the toolchain, or a remote run fails right after you edited a file (the\n'
+    printf 'mount may not have flushed yet — just re-run it once), do NOT work around it locally — run\n'
+    printf 'it on `%s` via the `ssh %s ...` forms above.\n' "$3" "$3"
   } > "$1"
 }
 
@@ -106,7 +113,9 @@ case "${1:-}" in
         # snapshot overriding a project-local opencode.json.
         CFG="$SD/opencode.json"
         [ "$yolo" = 1 ] && perm='"permission": "allow", ' || perm=''
-        printf '{ "$schema": "https://opencode.ai/config.json", %s"instructions": ["%s"] }\n' "$perm" "$RULE" > "$CFG"
+        # JSON-escape the rule path: escape \ then " (both legal in Unix paths; rare but correct).
+        rule_json="$(printf '%s' "$RULE" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        printf '{ "$schema": "https://opencode.ai/config.json", %s"instructions": ["%s"] }\n' "$perm" "$rule_json" > "$CFG"
         env_out="OPENCODE_CONFIG=$CFG"
         ;;
       codex)
@@ -126,10 +135,17 @@ case "${1:-}" in
         { [ -f "$HOME/.codex/AGENTS.md" ] && { cat "$HOME/.codex/AGENTS.md"; printf '\n\n'; }
           cat "$RULE"; } > "$CH/AGENTS.md" 2>/dev/null || cp "$RULE" "$CH/AGENTS.md"
         env_out="CODEX_HOME=$CH"
-        # codex's default workspace-write sandbox disables network, which would block the rule's
-        # `ssh <box> 'cd ... && <cmd>'` to the laptop. Grant network for this session so those run.
-        # (Under --yolo the bypass flag already drops the sandbox, so this is redundant-but-harmless.)
-        flags_out="-c sandbox_workspace_write.network_access=true"
+        # codex's default sandbox gates network, which blocks the rule's `ssh <host> ...`. The
+        # `[sandbox_workspace_write]` sub-table only merges when workspace-write is EXPLICITLY
+        # selected, so `-s workspace-write` is required — `network_access` alone at the implicit
+        # default is IGNORED. Under --yolo, --dangerously-bypass-approvals-and-sandbox already drops
+        # the sandbox entirely, so DON'T add -s there (it would conflict).
+        # KNOWN LIMITATION (default sandbox): workspace-write keeps ~/.ssh READ-ONLY, so ssh's
+        # ControlMaster socket / known_hosts writes there are denied. It works while the
+        # harness-warmed ControlMaster is reused; if it lapses (or in reverse, where the box→host
+        # master isn't pre-warmed), the ssh-to-host can fail. For heavy/long codex sessions prefer
+        # `/remote-harness yolo` (drops the sandbox). Verify on real codex.
+        [ "$yolo" = 1 ] && flags_out="" || flags_out="-s workspace-write -c sandbox_workspace_write.network_access=true"
         ;;
     esac
     printf 'RH_STATUS=INJECTED\n'
