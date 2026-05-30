@@ -9,10 +9,12 @@ set -uo pipefail
 U=$(id -un 2>/dev/null || whoami 2>/dev/null || echo user)
 
 # Public egress IP (best-effort; the INBOUND address/port may differ behind NAT/port-forward).
-# Use curl's own --max-time (always present) rather than `timeout` (absent on stock macOS).
+# Prefer curl's own --max-time (no `timeout`, absent on stock macOS); fall back to wget on minimal
+# boxes that ship wget but not curl (common on stripped Linux/WSL/container images).
 PUB=""
 for url in https://api.ipify.org https://ifconfig.me https://icanhazip.com; do
-  PUB=$(curl -fsS --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]') && [ -n "$PUB" ] && break
+  PUB=$( { curl -fsS --max-time 5 "$url" 2>/dev/null || wget -qO- --timeout=5 "$url" 2>/dev/null; } | tr -d '[:space:]' )
+  [ -n "$PUB" ] && break
   PUB=""
 done
 

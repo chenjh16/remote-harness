@@ -43,15 +43,18 @@ this box:  ssh <BOX_ALIAS>          → 127.0.0.1:<PORT> → (tunnel) → laptop
 
 若 `SSHD_TCP_FORWARDING=restricted-needs-attention`：提示该服务器的 sshd 阻止了反向转发（`AllowTcpForwarding no|local`）——用户需将其设为 `yes`/`remote` 并重启 sshd。
 
+若 `DEFAULT_IDENTITY` 返回为**空**（这台机器还没有 SSH 密钥），请加上 `--gen-key`，让 `setup-tunnel.sh` 生成一个 ed25519 密钥并输出非空的 `PUBKEY`。否则隧道没有可授权的密钥，后续 Phase 5 登录会卡在密码提示。
+
 ```bash
 "$RH/scripts/setup-tunnel.sh" \
   --alias <LAPTOP_USER_GUESS>-mac \
   --port  <SUGGESTED_PORT> \
   --user  <LAPTOP_USER_GUESS> \
-  [--identity <DEFAULT_IDENTITY>]
+  [--identity <DEFAULT_IDENTITY>] \
+  [--gen-key]   # 当 DEFAULT_IDENTITY 为空（机器上没有现成密钥）时加上
 ```
 
-从输出中提取：`ALIAS`（服务器端别名，例如 `my-mac`）、`PORT`。
+从输出中提取：`ALIAS`（服务器端别名，例如 `my-mac`）、`PORT`、`PUBKEY`。若 `PUBKEY` 为空，请加 `--gen-key` 重跑。
 
 ### 1b. 询问用户如何连接到本服务器
 

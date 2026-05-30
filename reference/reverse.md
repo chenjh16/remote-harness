@@ -48,15 +48,21 @@ gate proceeding). The mountpoint must be empty because sshfs hides existing file
 If `SSHD_TCP_FORWARDING=restricted-needs-attention`: warn that this box's sshd blocks reverse
 forwarding (`AllowTcpForwarding no|local`) — user must set it to `yes`/`remote` + restart sshd.
 
+If `DEFAULT_IDENTITY` came back **empty** (this box has no SSH key yet), pass `--gen-key` so
+`setup-tunnel.sh` creates an ed25519 key and emits a non-empty `PUBKEY`. Without it the tunnel has no
+key to authorize on the laptop, and the Phase-5 login later fails with a password prompt.
+
 ```bash
 "$RH/scripts/setup-tunnel.sh" \
   --alias <LAPTOP_USER_GUESS>-mac \
   --port  <SUGGESTED_PORT> \
   --user  <LAPTOP_USER_GUESS> \
-  [--identity <DEFAULT_IDENTITY>]
+  [--identity <DEFAULT_IDENTITY>] \
+  [--gen-key]   # add this when DEFAULT_IDENTITY is empty (no existing box key)
 ```
 
-Capture from output: `ALIAS` (box-side alias, e.g. `my-mac`), `PORT`.
+Capture from output: `ALIAS` (box-side alias, e.g. `my-mac`), `PORT`, `PUBKEY`. If `PUBKEY` is
+empty, re-run with `--gen-key`.
 
 ### 1b. Ask how the user connects to this box
 

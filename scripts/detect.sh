@@ -104,7 +104,7 @@ emit LOOPBACK_SSH_ALIASES "${aliases:-}"
 
 # --- Does sshd allow reverse forwarding? (best effort) ---------------------
 fwd="default-yes"
-if grep -qiE '^[[:space:]]*AllowTcpForwarding[[:space:]]+(no|local)\b' /etc/ssh/sshd_config 2>/dev/null; then
+if grep -qiE '^[[:space:]]*AllowTcpForwarding[[:space:]]+(no|local)([[:space:]]|$)' /etc/ssh/sshd_config 2>/dev/null; then
   fwd="restricted-needs-attention"
 fi
 emit SSHD_TCP_FORWARDING "$fwd"

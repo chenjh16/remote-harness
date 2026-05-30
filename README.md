@@ -249,7 +249,8 @@ remote-harness/
 ├── reference/{reverse,forward,scripts}.md   # per-direction flows + script contracts
 ├── scripts/                  # deterministic helpers (KEY=VALUE stdout), agent-agnostic
 │   ├── _common.sh            # shared lib (colors/ask/sq/parse_via/managed-alias/OS vars)
-│   ├── preflight.sh detect.sh setup-tunnel.sh connect-guesses.sh check-tunnel.sh  # reverse
+│   ├── preflight.sh            # one-shot preflight (both directions; --direction forward)
+│   ├── detect.sh setup-tunnel.sh connect-guesses.sh check-tunnel.sh  # reverse
 │   ├── server-guesses.sh local-setup.sh      # forward
 │   ├── laptop-setup.sh                        # reverse orchestrator
 │   └── mount-project.sh inject-rule.sh list-projects.sh   # shared by both

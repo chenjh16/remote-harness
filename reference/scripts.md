@@ -16,16 +16,20 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
   `DEFAULT_IDENTITY`, `SSHD_TCP_FORWARDING`, `ON_REMOTE`. Used when building the tunnel.
 - `"$RH/scripts/setup-tunnel.sh"` — (reverse) write the box-side `ssh` alias
   (`BOX_ALIAS → 127.0.0.1:PORT`). Emits `ALIAS`, `PORT`, `PUBKEY`, `REMOTEFORWARD_LINE`. Idempotent.
+  Pass `--gen-key` when the box has no SSH key (empty `DEFAULT_IDENTITY`) so it creates an ed25519 key
+  and `PUBKEY` is non-empty.
 - `"$RH/scripts/connect-guesses.sh"` — (reverse) guess how the laptop reaches this box.
-- `"$RH/scripts/check-tunnel.sh"` — (reverse) verify listener + real ssh login through the tunnel.
+- `"$RH/scripts/check-tunnel.sh"` — (reverse) verify listener + real ssh login through the tunnel
+  (`--port <PORT>` to check a specific forwarded port).
 - `"$RH/scripts/server-guesses.sh"` — (forward) suggest OUTBOUND ssh targets (the project server)
   from `~/.ssh/config` non-loopback aliases, known_hosts, and recent history. Prints `ssh <target>`
   lines. The user's own answer is authoritative.
 - `"$RH/scripts/list-projects.sh"` — list candidate project dirs locally, or on a remote via
   `--via '<ssh-args|alias>'` (used to enumerate the laptop's or server's projects). `PROJECT\t<path>…`.
 - `"$RH/scripts/mount-project.sh"` — sshfs-mount `<alias>:<remote-path>` onto a LOCAL mountpoint
-  (direction-agnostic). Refuses a non-empty target; revalidates/remounts a stale mount; `--unmount`
-  to detach. Emits `STATUS=mounted|already-mounted|need-sshfs|not-empty|failed|unmounted`.
+  (direction-agnostic). Refuses a non-empty target (`--force` to override); revalidates/remounts a
+  stale mount; `--unmount` to detach. Emits
+  `STATUS=mounted|already-mounted|need-sshfs|not-empty|failed|unmounted`.
 - `"$RH/scripts/local-setup.sh"` — **(forward) runs on the LOCAL machine**: resolves a stable ssh
   alias to the server (managed alias from `--via` if raw), sshfs-mounts the server's project locally,
   injects the run-on-server rule, and launches the agent locally in the mount; unmounts on exit.
@@ -44,10 +48,11 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
     - claude   → `RH_LAUNCH_FLAGS=--append-system-prompt-file <rule>` (session flag)
     - opencode → `RH_LAUNCH_ENV=OPENCODE_CONFIG=<session cfg>` (instructions; +`permission:"allow"` if yolo)
     - codex    → `RH_LAUNCH_ENV=CODEX_HOME=<session home>` (real auth/config symlinked; our `AGENTS.md`;
-      non-yolo also gets `RH_LAUNCH_FLAGS=-s workspace-write -c sandbox_workspace_write.network_access=true`
-      so the sandbox permits the rule's outbound ssh — `-s` is required, the sub-table is ignored at the
-      implicit default. Caveat: the default sandbox keeps `~/.ssh` read-only, so `/remote-harness yolo` is
-      most reliable for codex.)
+      non-yolo also gets `RH_LAUNCH_FLAGS=-s workspace-write -c sandbox_workspace_write.network_access=true
+      -c sandbox_workspace_write.writable_roots=["~/.ssh"]` so the sandbox permits the rule's outbound ssh
+      AND lets ssh write its ControlMaster socket / known_hosts under `~/.ssh` — `-s` is required, the
+      sub-table is ignored at the implicit default. For heavy/long codex sessions `/remote-harness yolo`
+      (drops the sandbox) is still simplest.)
   The rule says the cwd is an sshfs mount of `<code_path>` on `<host_alias>` and to run
   builds/tests/linters/installs/the app **on `<host_alias>`** via `ssh <host_alias> 'cd <code_path>
   && <cmd>'` (never on "this machine"), with **stack-tailored example commands** sniffed from the

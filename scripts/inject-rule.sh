@@ -12,8 +12,10 @@
 #              — `codex doctor` confirms CODEX_HOME is honored — and reads $CODEX_HOME/AGENTS.md as
 #              home-level global instructions). We symlink your real ~/.codex into the session home
 #              and compose AGENTS.md = your global AGENTS.md + our rule, so only THIS launch sees it.
-#              Also passes `-c sandbox_workspace_write.network_access=true` because codex's default
-#              sandbox blocks network — otherwise the rule's `ssh <box> ...` to the laptop is denied.
+#              Also passes `-s workspace-write -c sandbox_workspace_write.network_access=true -c
+#              sandbox_workspace_write.writable_roots=["~/.ssh"]` because codex's default sandbox
+#              blocks network and keeps ~/.ssh read-only — otherwise the rule's `ssh <box> ...` to the
+#              laptop is denied (network), or ssh can't write its ControlMaster/known_hosts (~/.ssh).
 #              The project's own AGENTS.md is still read additively; the mounted repo is never touched.
 #
 #   inject-rule.sh on  <agent> <laptop_path> <box_alias> <box_mountpoint> [yolo:0|1]
@@ -47,8 +49,16 @@ detect_cmds() {
   elif [ -n "$m" ] && { [ -f "$m/pyproject.toml" ] || [ -f "$m/requirements.txt" ] || [ -f "$m/setup.py" ]; }; then
     if [ -f "$m/requirements.txt" ]; then printf 'pip install -r requirements.txt\n'; else printf 'pip install -e .\n'; fi
     printf 'pytest\n'
-    [ -f "$m/.ruff.toml" ] || [ -f "$m/pyproject.toml" ] && printf 'ruff check .\n' || true
-    [ -f "$m/mypy.ini" ] || grep -qs '\[mypy\]' "$m/setup.cfg" "$m/pyproject.toml" 2>/dev/null && printf 'mypy .\n' || true
+    { [ -f "$m/ruff.toml" ] || [ -f "$m/.ruff.toml" ] || grep -qs 'ruff' "$m/pyproject.toml" 2>/dev/null; } && printf 'ruff check .\n' || true
+    [ -f "$m/mypy.ini" ] || grep -qsE '\[(tool\.)?mypy\]' "$m/setup.cfg" "$m/pyproject.toml" 2>/dev/null && printf 'mypy .\n' || true
+  elif [ -n "$m" ] && [ -f "$m/pom.xml" ]; then
+    if [ -f "$m/mvnw" ]; then mvn=./mvnw; else mvn=mvn; fi
+    printf '%s -q compile\n%s test\n%s package\n' "$mvn" "$mvn" "$mvn"
+  elif [ -n "$m" ] && { [ -f "$m/build.gradle" ] || [ -f "$m/build.gradle.kts" ] || [ -f "$m/settings.gradle" ] || [ -f "$m/settings.gradle.kts" ]; }; then
+    if [ -f "$m/gradlew" ]; then gr=./gradlew; else gr=gradle; fi
+    printf '%s build\n%s test\n%s run\n' "$gr" "$gr" "$gr"
+  elif [ -n "$m" ] && { ls "$m"/*.sln >/dev/null 2>&1 || ls "$m"/*.csproj >/dev/null 2>&1; }; then
+    printf 'dotnet restore\ndotnet build\ndotnet test\n'
   elif [ -n "$m" ] && [ -f "$m/Gemfile" ]; then
     printf 'bundle install\nbundle exec rake test\n'
   elif [ -n "$m" ] && { [ -f "$m/Makefile" ] || [ -f "$m/makefile" ]; }; then
@@ -140,12 +150,14 @@ case "${1:-}" in
         # selected, so `-s workspace-write` is required — `network_access` alone at the implicit
         # default is IGNORED. Under --yolo, --dangerously-bypass-approvals-and-sandbox already drops
         # the sandbox entirely, so DON'T add -s there (it would conflict).
-        # KNOWN LIMITATION (default sandbox): workspace-write keeps ~/.ssh READ-ONLY, so ssh's
-        # ControlMaster socket / known_hosts writes there are denied. It works while the
-        # harness-warmed ControlMaster is reused; if it lapses (or in reverse, where the box→host
-        # master isn't pre-warmed), the ssh-to-host can fail. For heavy/long codex sessions prefer
-        # `/remote-harness yolo` (drops the sandbox). Verify on real codex.
-        [ "$yolo" = 1 ] && flags_out="" || flags_out="-s workspace-write -c sandbox_workspace_write.network_access=true"
+        # workspace-write keeps ~/.ssh READ-ONLY by default, which denies ssh's ControlMaster socket
+        # / known_hosts writes there and can break the rule's `ssh <host> ...` on a COLD master
+        # (notably in reverse, where the box→host master isn't pre-warmed). So we add ~/.ssh to
+        # writable_roots. The value is single-quoted so its inner double quotes survive the launch
+        # shell's `-lic` re-parse and reach codex's TOML parser as ["~/.ssh"] (a bare [~/.ssh] is
+        # invalid TOML). For heavy/long codex sessions `/remote-harness yolo` (drops the sandbox) is
+        # still simpler. Verify writable_roots ~ expansion on real codex.
+        [ "$yolo" = 1 ] && flags_out="" || flags_out="-s workspace-write -c sandbox_workspace_write.network_access=true -c 'sandbox_workspace_write.writable_roots=[\"~/.ssh\"]'"
         ;;
     esac
     printf 'RH_STATUS=INJECTED\n'

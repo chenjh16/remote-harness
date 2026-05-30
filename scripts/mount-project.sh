@@ -78,8 +78,15 @@ fi
 if is_mounted "$MP"; then
   want="$ALIAS:$RPATH"; have=""
   # On macOS/FUSE-T the mount source is an NFS loopback (not alias:path), so source-matching is
-  # unreliable there — fall back to liveness only.
-  [ "$OS" != Darwin ] && have="$(mounted_source "$MP")"
+  # unreliable there. The mount table is whitespace-delimited too, so a source containing spaces
+  # can't be parsed from $1 — in both cases skip the source match and rely on liveness only (else a
+  # live, correct mount on a spaced path would be misread as "points elsewhere" and needlessly remounted).
+  if [ "$OS" != Darwin ]; then
+    case "$want" in
+      *[[:space:]]*) ;;                       # spaced source: unparseable from the mount table
+      *) have="$(mounted_source "$MP")";;
+    esac
+  fi
   # Reuse only a LIVE mount that points at the requested project; otherwise drop the stale/wrong
   # one and remount fresh (fixes the dropped-tunnel re-run that used to launch into a dead dir).
   if mount_live "$MP" && { [ -z "$have" ] || [ "$have" = "$want" ]; }; then
@@ -105,6 +112,11 @@ fi
 err="$(mktemp)"
 # reconnect + keepalives so brief tunnel hiccups self-heal. idmap=user (libfuse sshfs) maps the
 # remote uid → ours; omitted on macOS, where FUSE-T's sshfs mounts via NFS and doesn't accept it.
+# We deliberately KEEP sshfs's default attribute/dir caching (no cache_timeout=0): disabling it
+# slows stat-heavy operations — git status, editor file-watchers, tree-scanning builds — noticeably
+# over the tunnel. The trade-off is a brief window where a just-written edit may not yet be visible
+# to a remote `ssh <alias> 'cd … && build'`; the injected rule tells the agent to simply re-run the
+# command once if a build fails right after an edit.
 case "$OS" in
   Darwin) SSHFS_OPTS="reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks";;
   *)      SSHFS_OPTS="reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks,idmap=user";;

@@ -18,14 +18,15 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
   `DEFAULT_IDENTITY`、`SSHD_TCP_FORWARDING`、`ON_REMOTE`。用于构建隧道时读取。
 - `"$RH/scripts/setup-tunnel.sh"` — （反向）在远端机器上写入 `ssh` 别名
   （`BOX_ALIAS → 127.0.0.1:PORT`）。输出 `ALIAS`、`PORT`、`PUBKEY`、`REMOTEFORWARD_LINE`。幂等操作。
+  当机器上没有 SSH 密钥（`DEFAULT_IDENTITY` 为空）时，传入 `--gen-key` 生成 ed25519 密钥，使 `PUBKEY` 非空。
 - `"$RH/scripts/connect-guesses.sh"` — （反向）猜测笔记本电脑访问此机器的方式。
-- `"$RH/scripts/check-tunnel.sh"` — （反向）验证监听器并通过隧道进行真实 ssh 登录测试。
+- `"$RH/scripts/check-tunnel.sh"` — （反向）验证监听器并通过隧道进行真实 ssh 登录测试（`--port <PORT>` 检查指定的转发端口）。
 - `"$RH/scripts/server-guesses.sh"` — （正向）从 `~/.ssh/config` 非回环别名、known_hosts 及近期历史中
   推测出站 ssh 目标（项目服务器），输出 `ssh <target>` 格式的行。用户自行填写的答案具有最终权威性。
 - `"$RH/scripts/list-projects.sh"` — 列出本地候选项目目录，或通过
   `--via '<ssh-args|alias>'` 在远端列出（用于枚举笔记本或服务器上的项目）。输出格式：`PROJECT\t<path>…`。
 - `"$RH/scripts/mount-project.sh"` — 通过 sshfs 将 `<alias>:<remote-path>` 挂载到本地挂载点
-  （方向无关）。拒绝挂载非空目标；对陈旧挂载重新验证/重新挂载；`--unmount` 卸载。
+  （方向无关）。拒绝挂载非空目标（`--force` 可覆盖）；对陈旧挂载重新验证/重新挂载；`--unmount` 卸载。
   输出 `STATUS=mounted|already-mounted|need-sshfs|not-empty|failed|unmounted`。
 - `"$RH/scripts/local-setup.sh"` — **（正向）在本地机器上运行**：将服务器的稳定 ssh 别名解析出来
   （若为原始参数则创建托管别名），在本地通过 sshfs 挂载服务器项目，注入「在服务器上运行」规则，
@@ -42,9 +43,10 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
     - claude   → `RH_LAUNCH_FLAGS=--append-system-prompt-file <rule>`（会话标志）
     - opencode → `RH_LAUNCH_ENV=OPENCODE_CONFIG=<session cfg>`（含指令；若指定 yolo 则追加 `permission:"allow"`）
     - codex    → `RH_LAUNCH_ENV=CODEX_HOME=<session home>`（真实 auth/config 通过符号链接引入；附带我们的 `AGENTS.md`；
-      非 yolo 时还会带 `RH_LAUNCH_FLAGS=-s workspace-write -c sandbox_workspace_write.network_access=true`，
-      使沙箱放行规则要求的出站 ssh——必须带 `-s`，否则默认模式下该子表会被忽略。注意：默认沙箱仍把
-      `~/.ssh` 设为只读，所以 codex 用 `/remote-harness yolo` 最可靠。）
+      非 yolo 时还会带 `RH_LAUNCH_FLAGS=-s workspace-write -c sandbox_workspace_write.network_access=true
+      -c sandbox_workspace_write.writable_roots=["~/.ssh"]`，使沙箱放行规则要求的出站 ssh，并允许 ssh 在
+      `~/.ssh` 下写入 ControlMaster socket / known_hosts——必须带 `-s`，否则默认模式下该子表会被忽略。
+      对于重度/长时间的 codex 会话，`/remote-harness yolo`（直接关掉沙箱）仍是最省心的。）
   规则内容：声明当前工作目录是 `<host_alias>` 上 `<code_path>` 的 sshfs 挂载，并要求通过
   `ssh <host_alias> 'cd <code_path> && <cmd>'` 在 `<host_alias>` 上运行构建/测试/lint/安装/应用
   （绝不在「本机」运行），同时附有从项目清单嗅探出的**针对技术栈的示例命令**。两个安装脚本均会将

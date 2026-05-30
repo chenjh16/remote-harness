@@ -80,7 +80,7 @@ cleanup() {
   fi
   if [ "${RULE_INJECTED:-0}" = 1 ]; then
     ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 "${TARGET:-}" \
-      "\"\${RH_HOME:-\$HOME/.remote-harness}/scripts/inject-rule.sh\" off '${LAUNCH_BASE:-claude}' $(sq "${REMOTE_MOUNTPOINT:-}")" >/dev/null 2>&1 \
+      "\"\${RH_HOME:-\$HOME/.remote-harness}/scripts/inject-rule.sh\" off $(sq "${LAUNCH_BASE:-claude}") $(sq "${REMOTE_MOUNTPOINT:-}")" >/dev/null 2>&1 \
       && ok "session-scoped rule + temp config removed" || true
   fi
   [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
@@ -191,15 +191,21 @@ cp "$CFG" "$CFG.rh-bak.$(date +%Y%m%d%H%M%S 2>/dev/null || echo bak)" 2>/dev/nul
 RF_LINE="    RemoteForward $PORT 127.0.0.1:22"
 if [ "$REUSE" = 1 ]; then
   tmp="$(mktemp)"
-  # Insert RemoteForward into the user's existing alias block (use 'hit' not 'in' — reserved in BSD awk).
-  if awk -v host="$TARGET" -v rf="$RF_LINE" '
+  # Insert RemoteForward + tunnel keepalives into the user's existing alias block, de-duping our own
+  # managed lines first so re-runs stay idempotent (use 'hit' not 'in' — reserved in BSD awk). The
+  # keepalives mirror the managed-alias branch so a reused alias detects a half-open NAT tunnel and
+  # fails loudly on a port collision instead of leaving a live-but-no-forward connection.
+  if awk -v host="$TARGET" -v rf="$RF_LINE" \
+      -v o1="    ServerAliveInterval 30" -v o2="    ServerAliveCountMax 3" \
+      -v o3="    ExitOnForwardFailure yes" -v o4="    TCPKeepAlive yes" '
     function H(s){return s~/^[ \t]*[Hh][Oo][Ss][Tt][ \t]/}
     BEGIN{hit=0}
     {if(H($0)){hit=0;n=split($0,a,/[ \t]+/);for(i=1;i<=n;i++){if(a[i]=="#")break;if(i>1&&a[i]==host)hit=1}
-     print;if(hit)print rf;next}
+     print;if(hit){print rf;print o1;print o2;print o3;print o4}next}
      if(hit&&$0~/^[ \t]*RemoteForward[ \t]+[0-9]+[ \t]+127\.0\.0\.1:22[ \t]*$/)next
+     if(hit&&$0~/^[ \t]*(ServerAliveInterval|ServerAliveCountMax|ExitOnForwardFailure|TCPKeepAlive)([ \t]|$)/)next
      print}' "$CFG" > "$tmp" && mv "$tmp" "$CFG"; then
-    ok "ssh config: added RemoteForward $PORT inside existing 'Host $TARGET'"
+    ok "ssh config: added RemoteForward $PORT + keepalives inside existing 'Host $TARGET'"
   else
     warn "ssh config: awk edit failed — add '$RF_LINE' under 'Host $TARGET' manually"; rm -f "$tmp"
   fi
@@ -259,8 +265,17 @@ for i in $(seq 1 10); do
 done
 if [ "$READY" = 1 ]; then
   ok "Tunnel active — remote port $PORT is live"
+elif ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+  # The backgrounded `ssh -N` already exited. With ExitOnForwardFailure=yes that means the
+  # RemoteForward couldn't bind (port collision on the box) or auth/connect failed. Don't mount over
+  # a dead tunnel and surface a misleading "Mount failed" — report the real cause and bail (the EXIT
+  # trap runs cleanup; nothing is mounted yet).
+  err "Tunnel failed: the SSH connection carrying RemoteForward $PORT exited before the port came up."
+  say "    Likely a port collision on the box (another tunnel already holds $PORT) or an ssh auth/connect failure."
+  say "    Retry with a different ${_B}--port${_0}, or confirm you can ${_B}ssh $TARGET${_0} non-interactively."
+  exit 1
 else
-  warn "Could not confirm port $PORT on remote (may still be starting)."
+  warn "Could not confirm port $PORT on remote (tunnel still up — may still be starting)."
   say "    Proceeding — if the mount fails, reconnect and re-run."
 fi
 
@@ -393,7 +408,7 @@ fi
 # an env prefix (CODEX_HOME / OPENCODE_CONFIG) for codex/opencode. For opencode, YOLO's
 # permission=allow is folded into that per-session config too.
 rh_out=$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 "$TARGET" \
-     "\"\${RH_HOME:-\$HOME/.remote-harness}/scripts/inject-rule.sh\" on '$LAUNCH_BASE' $(sq "$PROJ_DIR") $(sq "$BOX_ALIAS") $(sq "$REMOTE_MOUNTPOINT") '$YOLO'" \
+     "\"\${RH_HOME:-\$HOME/.remote-harness}/scripts/inject-rule.sh\" on $(sq "$LAUNCH_BASE") $(sq "$PROJ_DIR") $(sq "$BOX_ALIAS") $(sq "$REMOTE_MOUNTPOINT") $(sq "$YOLO")" \
      2>/dev/null || printf 'RH_STATUS=ERROR\n')
 rh_status=$(printf '%s\n' "$rh_out" | sed -n 's/^RH_STATUS=//p' | head -1)
 if [ "$rh_status" = INJECTED ]; then
@@ -415,7 +430,7 @@ sep
 # is sourced — `ssh host cmd` alone runs a non-login non-interactive shell and won't find claude.
 # ClearAllForwardings=yes: don't re-request the RemoteForward (Phase 2's tunnel already holds it).
 ssh -t -o ClearAllForwardings=yes "$TARGET" \
-  "cd $(sq "$REMOTE_MOUNTPOINT") && exec \"\${SHELL:-/bin/bash}\" -lic '${EFF_LAUNCH}'"
+  "cd $(sq "$REMOTE_MOUNTPOINT") && exec \"\${SHELL:-/bin/bash}\" -lic $(sq "$EFF_LAUNCH")"
 CLAUDE_EXIT=$?
 
 # ===========================================================================
