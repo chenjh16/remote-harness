@@ -70,4 +70,12 @@ launch the agent in the mount.
 - Forward loopback E2E: add an ssh alias to `localhost`, run `local-setup.sh --via … --remote-path …
   --mountpoint /tmp/… --launch claude`; confirm mount + rule + unmount-on-exit.
 - The full two-host E2E (reverse from a box / forward to a server, incl. macOS FUSE-T) is a manual test.
-- This is a local-only repo on `main`; commit only when asked.
+- Commit only when asked. The repo publishes to GitHub (`origin/main`).
+- **Commit identity (required).** Every commit must carry a **GitHub noreply** email — GitHub rejects
+  any push that would expose a real address (error `GH007`). On a clone with no configured git identity
+  (e.g. a remote dev box), set it **per-commit** so nothing is written to `.git/config` or `--global`:
+  `git -c user.name=chenjh16 -c user.email=chenjh16@users.noreply.github.com commit …`
+- **Pushing.** Push only from the machine that holds GitHub push auth. To ship work done on a dev box
+  without push access: commit there with the per-commit identity above, then from the push machine
+  `git fetch` that box's clone (added as a remote) and `git push origin main`. While the box is the
+  active source, don't also commit on the push machine — avoid divergence.

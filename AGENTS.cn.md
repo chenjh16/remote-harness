@@ -42,4 +42,7 @@
 - 在沙盒 `HOME`/`RH_HOME` 中对各部分进行空跑（例如 `inject-rule.sh on … ; off …`；`preflight.sh --direction forward`；`mount-project.sh --unmount`）。验证在修改 `_common.sh` 时 reverse 模式生成的 managed-alias 输出保持不变。
 - Forward 回环端到端测试：向 `localhost` 添加一个 ssh 别名，运行 `local-setup.sh --via … --remote-path … --mountpoint /tmp/… --launch claude`；确认挂载、规则注入及退出时的卸载均正常。
 - 完整的双主机端到端测试（从远程主机 reverse / forward 到服务器，包括 macOS FUSE-T）为手动测试。
-- 本仓库为仅本地使用的 `main` 分支仓库；仅在被要求时提交。
+- 仅在被要求时提交。本仓库发布到 GitHub（`origin/main`）。
+- **提交身份（必须）。** 每个提交都必须使用 **GitHub noreply** 邮箱——GitHub 会拒绝任何会暴露真实邮箱的推送（错误 `GH007`）。在没有配置 git 身份的 clone 上（例如远程开发盒子），请**逐次提交**临时设置，不写入 `.git/config` 或 `--global`：
+  `git -c user.name=chenjh16 -c user.email=chenjh16@users.noreply.github.com commit …`
+- **推送。** 只在持有 GitHub 推送凭据的机器上 push。要把在无推送权限的开发盒子上做的工作发出去：在盒子上用上面的逐次身份提交，然后在推送机器上 `git fetch` 那个盒子的 clone（先加为 remote）并 `git push origin main`。盒子作为活跃源期间，推送机器只中转、不要也独立提交，避免分叉。
