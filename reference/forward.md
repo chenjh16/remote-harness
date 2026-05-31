@@ -2,9 +2,10 @@
 
 You (the agent) run on the user's LOCAL machine; the project lives on a remote server the machine
 can ssh to directly. No tunnel — everything runs locally + direct ssh, so the skill and the emitted
-command both run on THIS machine. Keep the same continuous, AskUserQuestion-gated flow (honor the
-**"Confirm, don't infer"** rule from SKILL.md); the only legitimate stops are an sshfs-install gate
-and the final hand-off. Helper-script contracts: `$RH/reference/scripts.md`.
+command both run on THIS machine. Keep the same continuous, question-tool-gated flow (honor the
+**"Confirm, don't infer"** rule and cross-agent question tool policy from SKILL.md); the only
+legitimate stops are an sshfs-install gate and the final hand-off. Helper-script contracts:
+`$RH/reference/scripts.md`.
 
 ## F-0 — Preflight (local)
 

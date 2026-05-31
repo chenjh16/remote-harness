@@ -4,7 +4,8 @@ The agent runs on a **remote box**; the code is on the user's **laptop** (behind
 dial the laptop, so the laptop opens a **reverse SSH tunnel** and the laptop project is sshfs-mounted
 onto the box. You (the agent, on the box) build the tunnel endpoint and hand the user ONE command to
 run on their laptop; `laptop-setup.sh` does the rest there. Honor the **"Confirm, don't infer"** rule
-from SKILL.md for every choice. Helper-script contracts: `$RH/reference/scripts.md`.
+and the cross-agent question tool policy from SKILL.md for every choice. Helper-script contracts:
+`$RH/reference/scripts.md`.
 
 ## How the reverse tunnel works
 

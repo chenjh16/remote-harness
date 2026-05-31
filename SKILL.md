@@ -36,8 +36,9 @@ machine the agent runs on; **P** = the machine the code lives on (referenced by 
 ## Interaction — keep the flow continuous
 
 This skill is **one continuous agent-driven flow** from picking the direction to handing over the
-final command. Whenever a step is blocked, use your interactive question tool (AskUserQuestion in
-Claude Code; chat in Codex/opencode) to guide the user — never end your turn and passively wait.
+final command. Whenever a step needs a user decision or is blocked, use the best interactive input
+channel your agent runtime exposes — never skip a required confirmation, and never continue past an
+unanswered decision.
 
 > **Confirm, don't infer (REQUIRED).** Detected values — direction, the project/codebase to develop,
 > and the mountpoint where the agent will launch — are only DEFAULTS that PRE-FILL a question, never
@@ -45,9 +46,14 @@ Claude Code; chat in Codex/opencode) to guide the user — never end your turn a
 > the final command. Auto-detection (e.g. `SSH_CONNECTION` → direction, cwd → mountpoint) only
 > pre-selects the likely option; it must NOT skip the question. Never silently assume the user's intent.
 
-> **Cross-agent note:** wherever the steps say "**AskUserQuestion**", that is the Claude Code tool.
-> In **Codex or opencode** (no such tool), just ask the question in chat — present the same options
-> as a short list — and wait for the user's reply before continuing.
+> **Cross-agent question tool policy:** wherever the steps say "**AskUserQuestion**", use the
+> runtime's structured user-input tool when one is available. Claude Code: use `AskUserQuestion`.
+> Codex: if `request_user_input` is listed and available for the current collaboration mode, use it
+> for the decision; it waits for the user's answer and may add an `Other` free-form option. If Codex
+> says `request_user_input` is unavailable (commonly because the session is in Default mode without
+> the `default_mode_request_user_input` feature), fall back to one concise chat question and wait for
+> the reply. opencode: ask in chat and wait. For chat fallbacks, batch tightly related decisions
+> (up to three) only when doing so reduces round-trips and the expected answer format is obvious.
 
 The **only legitimate places to stop** are:
 - `sshfs` blocked: give the install cmd, AskUserQuestion ("installed? ✅/⚠️"), re-run on ✅.
@@ -80,8 +86,8 @@ Parse `KEY=VALUE` from each script's stdout; human notes go to stderr.
 
 ## Step −1 — Pick the direction (ALWAYS ASK — never decide silently)
 
-**You MUST ask the user which direction, even when you can guess.** Use AskUserQuestion (in
-Codex/opencode, ask in chat) — "Where does your code live, relative to where I'm running?":
+**You MUST ask the user which direction, even when you can guess.** Use the cross-agent question tool
+policy above — "Where does your code live, relative to where I'm running?":
 - **Reverse** — "I'm on a remote box; my code is on my laptop (behind NAT)."
 - **Forward** — "I'm running locally; my code is on a remote server I can ssh to."
 
