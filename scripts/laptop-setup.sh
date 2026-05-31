@@ -13,13 +13,13 @@
 #   (
 #     d=$(mktemp -d "${TMPDIR:-/tmp}/rh.XXXXXX") || exit
 #     trap 'rm -rf "$d"' EXIT
-#     ssh <CONNECT> 'cat ~/.remote-harness/scripts/_common.sh'      >"$d/_common.sh" &&
-#     ssh <CONNECT> 'cat ~/.remote-harness/scripts/laptop-setup.sh' >"$d/laptop-setup.sh" &&
+#     ssh -o ClearAllForwardings=yes <CONNECT> 'cat ~/.remote-harness/scripts/_common.sh'      >"$d/_common.sh" &&
+#     ssh -o ClearAllForwardings=yes <CONNECT> 'cat ~/.remote-harness/scripts/laptop-setup.sh' >"$d/laptop-setup.sh" &&
 #     bash "$d/laptop-setup.sh" --host <HOST> --port <PORT> --via '<CONNECT>' --box-alias <ALIAS>
 #   )
 #
 # Flags:
-#   --host <alias|ip>     ssh Host block to write/update (required)
+#   --host <alias|ip>     ssh entry used to reach the box; a dedicated harness alias is managed
 #   --port <PORT>         RemoteForward port on the remote (required)
 #   --via <ssh-args>      exact ssh args to reach the box (e.g. "-p 2222 user@1.2.3.4")
 #   --box-alias <name>    alias the BOX uses to reach back to this laptop (default: <user>-mac)
@@ -141,9 +141,9 @@ if [ -z "$PUBKEY" ]; then
   if [ -n "$VIA" ]; then
     # $VIA is intentionally unquoted so it word-splits into ssh args; NOT eval'd (avoids running
     # shell metacharacters in a mistyped/crafted connect string locally).
-    PUBKEY="$(ssh -n -o BatchMode=yes -o ConnectTimeout=10 $VIA "$KCMD" 2>/dev/null || true)"
+    PUBKEY="$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10 $VIA "$KCMD" 2>/dev/null || true)"
   elif [ -n "$HOST" ]; then
-    PUBKEY="$(ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$HOST" "$KCMD" 2>/dev/null || true)"
+    PUBKEY="$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10 "$HOST" "$KCMD" 2>/dev/null || true)"
   fi
   PUBKEY="$(printf '%s' "$PUBKEY" | sed -n '1p')"
 fi
@@ -202,51 +202,100 @@ fi
 CFG="$HOME/.ssh/config"; touch "$CFG"; chmod 600 "$CFG" 2>/dev/null || true
 TARGET=""; REUSE=0   # block_exists / remove_host_block / write_managed_alias come from _common.sh
 
-# The --via connection is the GROUND TRUTH for how to reach the box. If it carries an explicit
-# user, port, identity, or jump host (a raw connection like `-J jump -p 2222 user@ip`), reach the box
-# through a DEDICATED managed alias built from those exact params — NEVER by writing RemoteForward
-# into a coincidental/stale `Host <ip>` block, which may resolve to the wrong user/port/key/path.
-# Only reuse --host when --via IS just that alias.
+legacy_host_has_rh_forward() {
+  local _host="$1"
+  [ -f "$CFG" ] || return 1
+  awk -v host="$_host" '
+    function H(s){return s~/^[ \t]*[Hh][Oo][Ss][Tt][ \t]/}
+    H($0){hit=0;n=split($0,a,/[ \t]+/);for(i=2;i<=n;i++){if(a[i]=="#")break;if(a[i]==host)hit=1}}
+    hit&&$0~/^[ \t]*RemoteForward[ \t]+[0-9]+[ \t]+127\.0\.0\.1:22[ \t]*$/ {found=1}
+    END{exit !found}
+  ' "$CFG"
+}
+remove_legacy_host_forward() {
+  local _host="$1" _tmp
+  _tmp="$(mktemp)"
+  awk -v host="$_host" '
+    function H(s){return s~/^[ \t]*[Hh][Oo][Ss][Tt][ \t]/}
+    H($0){hit=0;n=split($0,a,/[ \t]+/);for(i=2;i<=n;i++){if(a[i]=="#")break;if(a[i]==host)hit=1};print;next}
+    hit&&$0~/^[ \t]*RemoteForward[ \t]+[0-9]+[ \t]+127\.0\.0\.1:22[ \t]*$/ {next}
+    hit&&$0~/^[ \t]*(ServerAliveInterval|ServerAliveCountMax|ExitOnForwardFailure|TCPKeepAlive)([ \t]|$)/ {next}
+    {print}
+  ' "$CFG" > "$_tmp" && mv "$_tmp" "$CFG"
+}
+load_effective_ssh_alias() {
+  local _alias="$1" _cfg _identity
+  _cfg="$(ssh -G "$_alias" 2>/dev/null || true)"
+  [ -n "$_cfg" ] || return 1
+  V_HOST=$(printf '%s\n' "$_cfg" | awk 'tolower($1)=="hostname"{print $2; exit}')
+  V_PORT=$(printf '%s\n' "$_cfg" | awk 'tolower($1)=="port"{print $2; exit}')
+  V_USER=$(printf '%s\n' "$_cfg" | awk 'tolower($1)=="user"{print $2; exit}')
+  V_PROXYJUMP=$(printf '%s\n' "$_cfg" | awk 'tolower($1)=="proxyjump" && $2!="none"{print $2; exit}')
+  V_IDENTITY=""
+  while IFS= read -r _identity; do
+    case "$_identity" in ~/*) _identity="$HOME/${_identity#~/}";; esac
+    [ -f "$_identity" ] && { V_IDENTITY="$_identity"; break; }
+  done <<EOF
+$(printf '%s\n' "$_cfg" | awk 'tolower($1)=="identityfile"{print $2}')
+EOF
+}
+# The --via connection is the GROUND TRUTH for how to reach the box. Use a DEDICATED managed alias
+# for the harness connection even when --via is a normal `Host intellios` alias; otherwise ordinary
+# `ssh intellios` inherits RemoteForward and fails while a harness tunnel already owns the port.
+cp "$CFG" "$CFG.rh-bak.$(date +%Y%m%d%H%M%S 2>/dev/null || echo bak)" 2>/dev/null || true
 RAW_CONN=0; { [ -n "$V_PORT" ] || [ -n "$V_USER" ] || [ -n "$V_IDENTITY" ] || [ -n "$V_PROXYJUMP" ]; } && RAW_CONN=1
 if [ "$RAW_CONN" = 0 ] && [ -n "$HOST" ] && block_exists "$HOST"; then
-  TARGET="$HOST"; REUSE=1
-else
-  TARGET="${BOX_USER:-${V_USER:-box}}-remote"
+  load_effective_ssh_alias "$HOST" || warn "ssh config: could not resolve Host '$HOST' with ssh -G; using it as HostName"
+  if legacy_host_has_rh_forward "$HOST"; then
+    remove_legacy_host_forward "$HOST" \
+      && ok "ssh config: removed legacy remote-harness RemoteForward from existing 'Host $HOST'" \
+      || warn "ssh config: could not remove legacy RemoteForward from 'Host $HOST'"
+  fi
 fi
-cp "$CFG" "$CFG.rh-bak.$(date +%Y%m%d%H%M%S 2>/dev/null || echo bak)" 2>/dev/null || true
-RF_LINE="    RemoteForward $PORT 127.0.0.1:22"
-if [ "$REUSE" = 1 ]; then
-  tmp="$(mktemp)"
-  # Insert RemoteForward + tunnel keepalives into the user's existing alias block, de-duping our own
-  # managed lines first so re-runs stay idempotent (use 'hit' not 'in' — reserved in BSD awk). The
-  # keepalives mirror the managed-alias branch so a reused alias detects a half-open NAT tunnel and
-  # fails loudly on a port collision instead of leaving a live-but-no-forward connection.
-  if awk -v host="$TARGET" -v rf="$RF_LINE" \
-      -v o1="    ServerAliveInterval 30" -v o2="    ServerAliveCountMax 3" \
-      -v o3="    ExitOnForwardFailure yes" -v o4="    TCPKeepAlive yes" '
-    function H(s){return s~/^[ \t]*[Hh][Oo][Ss][Tt][ \t]/}
-    BEGIN{hit=0}
-    {if(H($0)){hit=0;n=split($0,a,/[ \t]+/);for(i=1;i<=n;i++){if(a[i]=="#")break;if(i>1&&a[i]==host)hit=1}
-     print;if(hit){print rf;print o1;print o2;print o3;print o4}next}
-     if(hit&&$0~/^[ \t]*RemoteForward[ \t]+[0-9]+[ \t]+127\.0\.0\.1:22[ \t]*$/)next
-     if(hit&&$0~/^[ \t]*(ServerAliveInterval|ServerAliveCountMax|ExitOnForwardFailure|TCPKeepAlive)([ \t]|$)/)next
-     print}' "$CFG" > "$tmp" && mv "$tmp" "$CFG"; then
-    ok "ssh config: added RemoteForward $PORT + keepalives inside existing 'Host $TARGET'"
+[ -z "${V_HOST:-}" ] || safe_ssh_token "$V_HOST" || { printf 'unsafe resolved ssh HostName: %s\n' "$V_HOST" >&2; exit 2; }
+[ -z "${V_USER:-}" ] || safe_ssh_token "$V_USER" || { printf 'unsafe resolved ssh User: %s\n' "$V_USER" >&2; exit 2; }
+[ -z "${V_PROXYJUMP:-}" ] || safe_ssh_token "$V_PROXYJUMP" || { printf 'unsafe resolved ssh ProxyJump: %s\n' "$V_PROXYJUMP" >&2; exit 2; }
+TARGET="${HOST:-${BOX_USER:-${V_USER:-box}}}-remote-harness"
+write_target_forward() {
+  local _port="$1" _rf_line _tmp
+  _rf_line="    RemoteForward $_port 127.0.0.1:22"
+  if [ "$REUSE" = 1 ]; then
+    _tmp="$(mktemp)"
+    # Insert RemoteForward + tunnel keepalives into the user's existing alias block, de-duping our own
+    # managed lines first so re-runs stay idempotent (use 'hit' not 'in' — reserved in BSD awk). The
+    # keepalives mirror the managed-alias branch so a reused alias detects a half-open NAT tunnel and
+    # fails loudly on a port collision instead of leaving a live-but-no-forward connection.
+    if awk -v host="$TARGET" -v rf="$_rf_line" \
+        -v o1="    ServerAliveInterval 30" -v o2="    ServerAliveCountMax 3" \
+        -v o3="    ExitOnForwardFailure yes" -v o4="    TCPKeepAlive yes" '
+      function H(s){return s~/^[ \t]*[Hh][Oo][Ss][Tt][ \t]/}
+      BEGIN{hit=0}
+      {if(H($0)){hit=0;n=split($0,a,/[ \t]+/);for(i=1;i<=n;i++){if(a[i]=="#")break;if(i>1&&a[i]==host)hit=1}
+       print;if(hit){print rf;print o1;print o2;print o3;print o4}next}
+       if(hit&&$0~/^[ \t]*RemoteForward[ \t]+[0-9]+[ \t]+127\.0\.0\.1:22[ \t]*$/)next
+       if(hit&&$0~/^[ \t]*(ServerAliveInterval|ServerAliveCountMax|ExitOnForwardFailure|TCPKeepAlive)([ \t]|$)/)next
+       print}' "$CFG" > "$_tmp" && mv "$_tmp" "$CFG"; then
+      ok "ssh config: set RemoteForward $_port + keepalives inside existing 'Host $TARGET'"
+    else
+      warn "ssh config: awk edit failed — add '$_rf_line' under 'Host $TARGET' manually"; rm -f "$_tmp"
+      return 1
+    fi
   else
-    warn "ssh config: awk edit failed — add '$RF_LINE' under 'Host $TARGET' manually"; rm -f "$tmp"
+    # Create-or-replace a managed alias carrying the exact --via identity + RemoteForward (idempotent).
+    # Keepalives so a half-open tunnel (NAT idle / laptop sleep) is detected; ExitOnForwardFailure so a
+    # port-collision fails loudly instead of leaving a live-but-no-forward connection that polls as "up".
+    if write_managed_alias "$TARGET" "$_rf_line" \
+        "    ServerAliveInterval 30" "    ServerAliveCountMax 3" \
+        "    ExitOnForwardFailure yes" "    TCPKeepAlive yes"; then
+      ok "ssh config: wrote managed 'Host $TARGET' (HostName ${V_HOST:-?}, port ${V_PORT:-22}, user ${V_USER:-<login default>}) + RemoteForward $_port"
+    else
+      err "ssh config: could not write managed Host '$TARGET'"
+      return 1
+    fi
   fi
-else
-  # Create-or-replace a managed alias carrying the exact --via identity + RemoteForward (idempotent).
-  # Keepalives so a half-open tunnel (NAT idle / laptop sleep) is detected; ExitOnForwardFailure so a
-  # port-collision fails loudly instead of leaving a live-but-no-forward connection that polls as "up".
-  if write_managed_alias "$TARGET" "$RF_LINE" \
-      "    ServerAliveInterval 30" "    ServerAliveCountMax 3" \
-      "    ExitOnForwardFailure yes" "    TCPKeepAlive yes"; then
-    ok "ssh config: wrote managed 'Host $TARGET' (HostName ${V_HOST:-?}, port ${V_PORT:-22}, user ${V_USER:-<login default>}) + RemoteForward"
-  else
-    err "ssh config: could not write managed Host '$TARGET'"
-    exit 2
-  fi
+}
+write_target_forward "$PORT" || exit 2
+if [ "$REUSE" != 1 ]; then
   say "    Reconnect to the box via: ${_B}ssh $TARGET${_0}"
 fi
 chmod 600 "$CFG" 2>/dev/null || true
@@ -274,40 +323,148 @@ hdr "Phase 2: establishing tunnel"
 ssh -O exit "$TARGET" 2>/dev/null || true
 if [ -n "$VIA" ]; then ssh -O exit $VIA 2>/dev/null || true; fi   # $VIA unquoted to word-split; not eval'd
 
-say "  Opening connection as '${_B}$TARGET${_0}' (carries RemoteForward $PORT)..."
-ssh -N "$TARGET" >/dev/null 2>&1 &
-TUNNEL_PID=$!
 trap cleanup EXIT INT TERM HUP   # auto-unmount + drop the tunnel when this script exits
 
-# Poll until the remote port is listening (up to 20s)
-READY=0
-for _ in $(seq 1 10); do
-  sleep 2
+remote_port_listening() {
+  local _port="$1"
   # Portable listener check on the box (ss -> netstat -an [GNU/BSD] -> lsof), matching detect.sh /
   # check-tunnel.sh; extracts the port from host:PORT or BSD host.PORT and matches exactly.
-  if ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=3 "$TARGET" \
-       "{ if command -v ss >/dev/null 2>&1; then ss -tlnH 2>/dev/null | awk '{print \$4}';
-          elif command -v netstat >/dev/null 2>&1; then netstat -an 2>/dev/null | awk '/^tcp/ && /LISTEN/{print \$4}';
-          elif command -v lsof >/dev/null 2>&1; then lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print \$9}';
-          fi; } | sed -E 's/.*[:.]([0-9]+)\$/\1/' | grep -qx '$PORT'" 2>/dev/null; then
-    READY=1; break
+  ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=3 "$TARGET" \
+    "{ if command -v ss >/dev/null 2>&1; then ss -tlnH 2>/dev/null | awk '{print \$4}';
+       elif command -v netstat >/dev/null 2>&1; then netstat -an 2>/dev/null | awk '/^tcp/ && /LISTEN/{print \$4}';
+       elif command -v lsof >/dev/null 2>&1; then lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print \$9}';
+       fi; } | sed -E 's/.*[:.]([0-9]+)\$/\1/' | grep -qx $(sq "$_port")" 2>/dev/null
+}
+tunnel_alias_up() {
+  local _port="$1" out laptop_host laptop_user local_host local_user
+  out=$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 "$TARGET" "
+    rh=\"\${RH_HOME:-\$HOME/.remote-harness}\"
+    if [ -x \"\$rh/scripts/check-tunnel.sh\" ]; then
+      \"\$rh/scripts/check-tunnel.sh\" --alias $(sq "$BOX_ALIAS") --port $(sq "$_port")
+    else
+      ssh -o BatchMode=yes -o ConnectTimeout=5 $(sq "$BOX_ALIAS") 'printf \"RH_OK %s %s\" \"\$(hostname 2>/dev/null)\" \"\$(id -un 2>/dev/null)\"'
+    fi
+  " 2>/dev/null || true)
+  if printf '%s\n' "$out" | grep -q '^SSH=up'; then
+    laptop_host=$(printf '%s\n' "$out" | awk -F= '/^LAPTOP_HOSTNAME=/{print $2; exit}')
+    laptop_user=$(printf '%s\n' "$out" | awk -F= '/^LAPTOP_USER=/{print $2; exit}')
+  elif printf '%s' "$out" | grep -q '^RH_OK'; then
+    laptop_host=$(printf '%s' "$out" | awk '{print $2}')
+    laptop_user=$(printf '%s' "$out" | awk '{print $3}')
+  else
+    return 1
+  fi
+  local_host=$(hostname 2>/dev/null || true)
+  local_user=$(id -un 2>/dev/null || true)
+  [ -z "$laptop_host" ] || [ -z "$local_host" ] || [ "$laptop_host" = "$local_host" ] || return 1
+  [ -z "$laptop_user" ] || [ -z "$local_user" ] || [ "$laptop_user" = "$local_user" ] || return 1
+  return 0
+}
+
+find_next_remote_port() {
+  local _start="$1" _port _end
+  _port="$_start"
+  _end=$((_start + 200))
+  [ "$_end" -le 65535 ] || _end=65535
+  while [ "$_port" -le "$_end" ]; do
+    if ! remote_port_listening "$_port"; then
+      printf '%s' "$_port"
+      return 0
+    fi
+    _port=$((_port + 1))
+  done
+  return 1
+}
+
+remote_box_alias_info() {
+  ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 "$TARGET" "
+    cfg=\$(ssh -G $(sq "$BOX_ALIAS") 2>/dev/null || true)
+    user=\$(printf '%s\n' \"\$cfg\" | awk 'tolower(\$1)==\"user\"{print \$2; exit}')
+    identity=\$(printf '%s\n' \"\$cfg\" | awk 'tolower(\$1)==\"identityfile\"{print \$2; exit}')
+    case \"\$identity\" in \"~/\"*) identity=\"\$HOME/\${identity#~/}\";; esac
+    [ -f \"\$identity\" ] || identity=\"\"
+    printf 'USER=%s\nIDENTITY=%s\n' \"\$user\" \"\$identity\"
+  " 2>/dev/null || true
+}
+
+update_box_alias_port() {
+  local _port="$1" info laptop_user identity identity_arg="" out
+  info=$(remote_box_alias_info)
+  laptop_user=$(printf '%s\n' "$info" | awk -F= '/^USER=/{print $2; exit}')
+  identity=$(printf '%s\n' "$info" | awk -F= '/^IDENTITY=/{print $2; exit}')
+  [ -n "$laptop_user" ] || laptop_user=$(id -un 2>/dev/null || printf user)
+  [ -n "$identity" ] && identity_arg=" --identity $(sq "$identity")"
+  out=$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" "
+    rh=\"\${RH_HOME:-\$HOME/.remote-harness}\"
+    [ -x \"\$rh/scripts/setup-tunnel.sh\" ] || { printf 'ERROR=missing setup-tunnel.sh\n'; exit 2; }
+    \"\$rh/scripts/setup-tunnel.sh\" --alias $(sq "$BOX_ALIAS") --port $(sq "$_port") --user $(sq "$laptop_user")$identity_arg
+  " 2>&1) || {
+    err "Could not update remote alias '$BOX_ALIAS' to port $_port."
+    printf '%s\n' "$out" >&2
+    return 1
+  }
+  ok "box alias: updated '$BOX_ALIAS' to remote port $_port"
+}
+
+switch_tunnel_port() {
+  local old_port="$PORT" new_port
+  new_port=$(find_next_remote_port "$((PORT + 1))") || {
+    err "Remote port $PORT is occupied, and no free port was found in the next 200 ports."
+    say "    Close the stale/conflicting SSH session, or rerun remote-harness and choose a known free port."
+    return 1
+  }
+  warn "Remote port $old_port is already listening, but '$BOX_ALIAS' does not reach this laptop."
+  say "    Switching this setup to remote port ${_B}$new_port${_0} and continuing."
+  update_box_alias_port "$new_port" || return 1
+  PORT="$new_port"
+  write_target_forward "$PORT" || return 1
+  chmod 600 "$CFG" 2>/dev/null || true
+}
+
+while :; do
+  if tunnel_alias_up "$PORT"; then
+    ok "Reusing existing reverse tunnel — $BOX_ALIAS already reaches this laptop on remote port $PORT"
+    say "    This script did not create that tunnel, so it will leave the tunnel itself running on exit."
+    break
+  fi
+  if remote_port_listening "$PORT"; then
+    switch_tunnel_port || exit 1
+    continue
+  fi
+
+  say "  Opening connection as '${_B}$TARGET${_0}' (carries RemoteForward $PORT)..."
+  ssh -N "$TARGET" >/dev/null 2>&1 &
+  TUNNEL_PID=$!
+
+  # Poll until the remote port is listening (up to 20s)
+  READY=0
+  for _ in $(seq 1 10); do
+    sleep 2
+    if remote_port_listening "$PORT"; then READY=1; break; fi
+    kill -0 "$TUNNEL_PID" 2>/dev/null || break
+  done
+  if [ "$READY" = 1 ]; then
+    ok "Tunnel active — remote port $PORT is live"
+    break
+  elif ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+    # The backgrounded `ssh -N` already exited. With ExitOnForwardFailure=yes that means the
+    # RemoteForward couldn't bind (port collision on the box) or auth/connect failed. Don't mount over
+    # a dead tunnel and surface a misleading "Mount failed" — report the real cause and bail (the EXIT
+    # trap runs cleanup; nothing is mounted yet).
+    TUNNEL_PID=""
+    if remote_port_listening "$PORT"; then
+      switch_tunnel_port || exit 1
+      continue
+    fi
+    err "Tunnel failed: the SSH connection carrying RemoteForward $PORT exited before the port came up."
+    say "    Likely an ssh auth/connect failure. Confirm you can ${_B}ssh $TARGET${_0} non-interactively."
+    exit 1
+  else
+    warn "Could not confirm port $PORT on remote (tunnel still up — may still be starting)."
+    say "    Proceeding — if the mount fails, reconnect and re-run."
+    break
   fi
 done
-if [ "$READY" = 1 ]; then
-  ok "Tunnel active — remote port $PORT is live"
-elif ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
-  # The backgrounded `ssh -N` already exited. With ExitOnForwardFailure=yes that means the
-  # RemoteForward couldn't bind (port collision on the box) or auth/connect failed. Don't mount over
-  # a dead tunnel and surface a misleading "Mount failed" — report the real cause and bail (the EXIT
-  # trap runs cleanup; nothing is mounted yet).
-  err "Tunnel failed: the SSH connection carrying RemoteForward $PORT exited before the port came up."
-  say "    Likely a port collision on the box (another tunnel already holds $PORT) or an ssh auth/connect failure."
-  say "    Retry with a different ${_B}--port${_0}, or confirm you can ${_B}ssh $TARGET${_0} non-interactively."
-  exit 1
-else
-  warn "Could not confirm port $PORT on remote (tunnel still up — may still be starting)."
-  say "    Proceeding — if the mount fails, reconnect and re-run."
-fi
 
 # ===========================================================================
 # Phase 3: Pick a project directory ON THIS LAPTOP
@@ -469,7 +626,7 @@ fi
 # Inject the run-on-laptop rule SCOPED TO THIS SESSION: inject-rule builds box-side, per-session
 # artifacts (nothing global, nothing in the mounted repo, so other projects on this box are
 # unaffected) and prints how to launch so ONLY this agent reads it — a session flag for claude, or
-# an env prefix (CODEX_HOME / OPENCODE_CONFIG) for codex/opencode. For opencode, YOLO's
+# an env/config prefix (Codex developer_instructions / OPENCODE_CONFIG) for codex/opencode. For opencode, YOLO's
 # permission=allow is folded into that per-session config too.
 rh_out=$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 "$TARGET" \
      "\"\${RH_HOME:-\$HOME/.remote-harness}/scripts/inject-rule.sh\" on $(sq "$LAUNCH_BASE") $(sq "$PROJ_DIR") $(sq "$BOX_ALIAS") $(sq "$REMOTE_MOUNTPOINT") $(sq "$YOLO")" \

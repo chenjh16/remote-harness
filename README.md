@@ -37,7 +37,7 @@
 你的**编码 Agent**(Claude Code / Codex / opencode)和你的**代码库**经常不在同一台机器上。
 `remote-harness` 把两者连起来:用 sshfs 把代码挂到 Agent 所在机器的一个空目录,注入一条规则让
 **编译/测试在「代码所在的那台机器」上跑**,然后在挂载目录里启动 Agent。Claude Code/opencode 通过
-`/remote-harness` 触发;Codex 直接输入 `remote-harness`(无斜杠)。中间所有信息都**交互式向你确认**,最后给你**一条可复制执行的命令**。
+`/remote-harness` 触发;Codex 用 `$remote-harness` 直接调用技能。中间所有信息都**交互式向你确认**,最后给你**一条可复制执行的命令**。
 
 记号:**A** = 运行 Agent 的机器;**P** = 存放代码的机器(用一个 ssh `<别名>` 指代)。
 
@@ -76,17 +76,17 @@
 |---|---|---|
 | 共享核心 | `~/.remote-harness/{SKILL.md, scripts/, reference/}` | (各方共用) |
 | Claude Code | `~/.claude/skills/remote-harness/SKILL.md` | `/remote-harness` |
-| Codex | `~/.codex/skills/remote-harness/SKILL.md` | 输入 `remote-harness`(无斜杠) |
+| Codex | `~/.codex/skills/remote-harness/SKILL.md` | `$remote-harness` |
 | opencode | `~/.config/opencode/command/remote-harness.md` | `/remote-harness` |
 
 **脚本**是唯一的单一事实来源——各 Agent 都调用 `~/.remote-harness/scripts/*`。每个 Agent 的入口
-形态不同:Claude Code 与 Codex 都是原生 *skill*(共用同一份 `SKILL.md`;Codex 无自定义斜杠命令,故输入
-`remote-harness` 触发),opencode 是让 Agent 去读共享 `SKILL.md` 的自定义命令。
+形态不同:Claude Code 与 Codex 都是原生 *skill*(共用同一份 `SKILL.md`;Codex 无自定义斜杠命令,推荐用
+`$remote-harness` 直接调用技能),opencode 是让 Agent 去读共享 `SKILL.md` 的自定义命令。
 
 ### 使用
 
 在你的 Agent 里启动 remote-harness:Claude Code/opencode 运行 `/remote-harness`(加 yolo:
-`/remote-harness 开启yolo模式`);Codex 输入 `remote-harness`(加 yolo:`remote-harness 开启yolo模式`)。它会:
+`/remote-harness 开启yolo模式`);Codex 输入 `$remote-harness`(加 yolo:`$remote-harness yolo模式，中文`)。它会:
 
 1. **问你方向**(reverse / forward;基于是否在 SSH 会话里预选默认项,但一定会问)。
 2. **一次性预检**(环境 / sshfs+FUSE / 隧道或服务器可达性),卡在第一个缺失项并给出补救命令。
@@ -169,8 +169,8 @@ remote-harness/
 Your **coding agent** (Claude Code / Codex / opencode) and your **codebase** often live on different
 machines. `remote-harness` connects them: it sshfs-mounts the code onto an empty dir where the agent
 runs, injects a rule so **builds/tests run on the machine that hosts the code**, and launches the
-agent in the mount. Claude Code/opencode trigger it with `/remote-harness`; Codex users type
-`remote-harness` (no slash). It **interactively confirms every choice** and hands you **one
+agent in the mount. Claude Code/opencode trigger it with `/remote-harness`; Codex users invoke the
+skill with `$remote-harness`. It **interactively confirms every choice** and hands you **one
 copy-paste command** to finish. Generically: **A** = the machine the agent runs on; **P** = the
 machine the code lives on (an ssh `<alias>`).
 
@@ -207,18 +207,19 @@ in the mount.**
 |---|---|---|
 | shared core | `~/.remote-harness/{SKILL.md, scripts/, reference/}` | (used by all) |
 | Claude Code | `~/.claude/skills/remote-harness/SKILL.md` | `/remote-harness` |
-| Codex | `~/.codex/skills/remote-harness/SKILL.md` | type `remote-harness` (no slash) |
+| Codex | `~/.codex/skills/remote-harness/SKILL.md` | `$remote-harness` |
 | opencode | `~/.config/opencode/command/remote-harness.md` | `/remote-harness` |
 
 The **scripts** are the single source of truth — every agent calls `~/.remote-harness/scripts/*`.
 Each agent's entry differs by what it supports: Claude Code and Codex both use a native *skill* (the
-shared `SKILL.md`; Codex has no custom slash commands, so you type `remote-harness`); opencode is a
+shared `SKILL.md`; Codex has no custom slash commands, so use `$remote-harness`); opencode is a
 custom command that reads the shared `SKILL.md`.
 
 ### Usage
 
 Start remote-harness in your agent: Claude Code/opencode run `/remote-harness` (add yolo:
-`/remote-harness yolo`); Codex users type `remote-harness` (add yolo: `remote-harness yolo`). It will:
+`/remote-harness yolo`); Codex users type `$remote-harness` (add yolo:
+`$remote-harness yolo模式，中文`). It will:
 
 1. **Ask the direction** (reverse / forward; pre-selected from whether you're in an SSH session, but
    always asked).

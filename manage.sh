@@ -107,10 +107,18 @@ if want claude; then
 fi
 if want codex; then
   # codex-cli has no custom /slash commands; it loads native skills from $CODEX_HOME/skills/<name>/.
-  # Install the shared SKILL.md as a skill — invoke by TYPING `remote-harness` (no slash).
-  guard_remove_target "$CODEX_DIR"; rm -rf "$CODEX_DIR"; mkdir -p "$CODEX_DIR"
-  place_file "$SRC/SKILL.md" "$CODEX_DIR/SKILL.md"
-  echo "  ✓ Codex skill ($MODE)       → $CODEX_DIR/SKILL.md  (invoke: type 'remote-harness', no slash)"
+  # In dev mode, link the whole skill directory to this repo. A SKILL.md file symlink inside a real
+  # directory is less reliable for Codex skill discovery and also hides reference assets from the
+  # skill directory itself.
+  guard_remove_target "$CODEX_DIR"; rm -rf "$CODEX_DIR"; mkdir -p "$(dirname "$CODEX_DIR")"
+  if [ "$MODE" = dev ]; then
+    ln -s "$SRC" "$CODEX_DIR"
+    echo "  ✓ Codex skill (dev)        → $CODEX_DIR  (repo symlink; invoke: '\$remote-harness')"
+  else
+    mkdir -p "$CODEX_DIR"
+    cp "$SRC/SKILL.md" "$CODEX_DIR/SKILL.md"
+    echo "  ✓ Codex skill (copy)       → $CODEX_DIR/SKILL.md  (invoke: '\$remote-harness')"
+  fi
 fi
 if want opencode; then
   place_file "$SRC/adapters/opencode.md" "$OPENCODE_FILE"
@@ -119,5 +127,5 @@ fi
 
 echo
 [ "$MODE" = dev ] && echo "DEV install: edits in $SRC are live immediately." || true
-echo "Done. Start it in your agent:  /remote-harness  (Claude Code / opencode)  ·  type 'remote-harness' (no slash) in Codex"
+echo "Done. Start it in your agent:  /remote-harness  (Claude Code / opencode)  ·  '\$remote-harness' in Codex"
 echo "  reverse: agent on a remote box, code on your laptop  |  forward: agent local, code on a remote server"

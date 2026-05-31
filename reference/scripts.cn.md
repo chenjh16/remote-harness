@@ -42,11 +42,12 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
   输出 `RH_STATUS`、`RH_LAUNCH_ENV`、`RH_LAUNCH_FLAGS`：
     - claude   → `RH_LAUNCH_FLAGS=--append-system-prompt-file '<rule>'`（会话标志）
     - opencode → `RH_LAUNCH_ENV=OPENCODE_CONFIG='<session cfg>'`（含指令；若指定 yolo 则追加 `permission:"allow"`）
-    - codex    → `RH_LAUNCH_ENV=CODEX_HOME='<session home>'`（真实 auth/config 通过符号链接引入；附带我们的 `AGENTS.md`；
-      非 yolo 时还会带 `RH_LAUNCH_FLAGS=-s workspace-write -c sandbox_workspace_write.network_access=true
+    - codex    → `RH_LAUNCH_FLAGS=-c 'developer_instructions="<rule>"'`（会话级 CLI 配置；
+      保留真实 `CODEX_HOME`，因此 keyring 存储的 ChatGPT 登录态仍可用）。非 yolo 时还会带
+      `-s workspace-write -c sandbox_workspace_write.network_access=true
       -c 'sandbox_workspace_write.writable_roots=["~/.ssh"]'`，使沙箱放行规则要求的出站 ssh，并允许 ssh 在
       `~/.ssh` 下写入 ControlMaster socket / known_hosts——必须带 `-s`，否则默认模式下该子表会被忽略。
-      对于重度/长时间的 codex 会话，`/remote-harness yolo`（直接关掉沙箱）仍是最省心的。）
+      对于重度/长时间的 codex 会话，`$remote-harness yolo模式，中文`（直接关掉沙箱）仍是最省心的。）
   规则内容：声明当前工作目录是 `<host_alias>` 上 `<code_path>` 的 sshfs 挂载，并要求通过
   `ssh <host_alias> 'cd <code_path> && <cmd>'` 在 `<host_alias>` 上运行构建/测试/lint/安装/应用
   （绝不在「本机」运行），同时附有从项目清单嗅探出的**针对技术栈的示例命令**。两个安装脚本均会将

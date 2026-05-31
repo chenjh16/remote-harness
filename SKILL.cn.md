@@ -2,7 +2,7 @@
 name: remote-harness
 description: >-
   搭建一套开发 harness，将运行在不同机器上的编程代理与代码库连接起来，支持双向工作模式。当用户执行
-  /remote-harness 时调用（Codex 没有斜杠命令，用户改为直接输入 remote-harness）。反向模式：代理运行在远程主机，代码在用户的笔记本（NAT 内网）——建立反向
+  /remote-harness（Claude Code/opencode）或 $remote-harness（Codex 技能调用）时调用。反向模式：代理运行在远程主机，代码在用户的笔记本（NAT 内网）——建立反向
   SSH 隧道。正向模式：代理在本地运行，代码在可直接 ssh 访问的远程服务器上。两种模式均通过 sshfs 将
   代码挂载到代理所在目录，指示代理在代码所在机器上执行构建/测试，并输出一条一键粘贴命令完成全部操作
   （挂载 + 启动 claude/codex/opencode）。支持 Linux/WSL/macOS。
@@ -39,7 +39,7 @@ description: >-
 
 ## 调用选项
 
-用户调用时可附带自由格式的请求（例如 `/remote-harness 开启yolo模式`、`/remote-harness yolo`、"...bypass approvals"）。解析意图并在输出命令时应用：
+用户调用时可附带自由格式的请求（例如 `/remote-harness 开启yolo模式`、`/remote-harness yolo`、`$remote-harness yolo模式，中文`、"...bypass approvals"）。解析意图并在输出命令时应用：
 
 - **YOLO / 跳过审批**（以下任意一种："yolo"、"bypass approvals"、"skip permissions"、"危险模式"、"免审批"、"开启yolo模式"）→ 在输出的命令中添加 `--yolo`（安装脚本会按代理类型做相应映射）。若意图不明确，确认一次；否则直接应用。若未传入，则正常启动。
 

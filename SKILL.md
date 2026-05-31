@@ -2,8 +2,8 @@
 name: remote-harness
 description: >-
   Set up a development harness that connects a coding agent and a codebase living on different
-  machines, in EITHER direction. Invoke when the user runs /remote-harness (or types "remote-harness"
-  in Codex, which has no slash commands). Reverse: the agent runs
+  machines, in EITHER direction. Invoke when the user runs /remote-harness (Claude Code/opencode)
+  or $remote-harness (Codex skill invocation). Reverse: the agent runs
   on a remote box and your code is on your LAPTOP (behind NAT) — builds a reverse SSH tunnel.
   Forward: the agent runs LOCALLY and your code is on a directly ssh-reachable REMOTE server. Either
   way it sshfs-mounts the code onto an empty dir where the agent runs, tells the agent to run
@@ -69,7 +69,8 @@ The **only legitimate places to stop** are:
 ## Invocation options
 
 The user may pass a free-form request when invoking (e.g. `/remote-harness 开启yolo模式`,
-`/remote-harness yolo`, "...bypass approvals"). Parse for intent and apply when emitting the command:
+`/remote-harness yolo`, `$remote-harness yolo模式，中文`, "...bypass approvals"). Parse for intent
+and apply when emitting the command:
 
 - **YOLO / bypass approvals** (any of: "yolo", "bypass approvals", "skip permissions", "危险模式",
   "免审批", "开启yolo模式") → add `--yolo` to the emitted command (the setup script maps it per agent).

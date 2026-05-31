@@ -58,7 +58,7 @@ Agent（即你）运行在用户的**本地机器**上；项目位于本机可�
 > 2. 通过 sshfs 将服务器上的项目挂载到本地目录
 > 3. 在该目录启动 Agent——构建/测试在服务器上执行（`ssh <alias> ...`），你的编辑实时生效
 >
-> 退出后，挂载将自动卸载。重新运行 `/remote-harness` 即可重新连接。
+> 退出后，挂载将自动卸载。再次启动 remote-harness 即可重新连接（Claude Code/opencode 用 `/remote-harness`，Codex 用 `$remote-harness`）。
 
 **你的本轮对话到此结束** — `local-setup.sh` 在本地侧自包含且具有交互性。
 

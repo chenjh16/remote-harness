@@ -118,9 +118,11 @@ Print the following **exactly as shown** (short lines, `\`-continued, ≲70 char
 (
   d=$(mktemp -d "${TMPDIR:-/tmp}/rh.XXXXXX") || exit
   trap 'rm -rf "$d"' EXIT
-  ssh <CONNECT_ARGS> 'cat ~/.remote-harness/scripts/_common.sh' \
+  ssh -o ClearAllForwardings=yes <CONNECT_ARGS> \
+    'cat ~/.remote-harness/scripts/_common.sh' \
     >"$d/_common.sh" &&
-  ssh <CONNECT_ARGS> 'cat ~/.remote-harness/scripts/laptop-setup.sh' \
+  ssh -o ClearAllForwardings=yes <CONNECT_ARGS> \
+    'cat ~/.remote-harness/scripts/laptop-setup.sh' \
     >"$d/laptop-setup.sh" &&
   bash "$d/laptop-setup.sh" --host <HOST_Q> --port <PORT> \
     --via <CONNECT_Q> --box-alias <ALIAS_Q> --launch <LAUNCH> \
@@ -129,6 +131,13 @@ Print the following **exactly as shown** (short lines, `\`-continued, ≲70 char
 ```
 (Two fetches into one temp dir: `laptop-setup.sh` sources `_common.sh` from beside it. The laptop
 usually has no install, so both files must be fetched together.)
+(`ClearAllForwardings=yes` on the two fetches is required: the user's SSH alias may already contain
+the previous `RemoteForward`, and a stale/live tunnel on the same port must not prevent downloading
+the setup scripts.)
+During Phase 2, `laptop-setup.sh` verifies that any existing listener on `<PORT>` actually reaches
+this laptop (hostname + user). If the port is owned by another/stale tunnel, it scans the next 200
+ports, rewrites the laptop `RemoteForward`, rewrites the box-side `<ALIAS>` with `setup-tunnel.sh`,
+and continues on the first free port.
 (`mktemp` avoids a predictable, world-writable `/tmp/rh.sh`; the subshell `trap` removes the temp dir
 without masking the fetch/setup exit code.)
 - `[--remote-mountpoint '<BOX_MP>']` = include only when **1b.5** chose an explicit box mountpoint
@@ -154,15 +163,15 @@ without masking the fetch/setup exit code.)
 Tell the user:
 
 > Run this **on your laptop** (in a local terminal, not this session). It will:
-> 1. Add the RemoteForward line to your ssh config (creating a `<BOX_USER>-remote` alias if needed)
+> 1. Add the RemoteForward line to a dedicated harness ssh alias (leaving your normal ssh alias alone)
 > 2. Reconnect automatically to activate the tunnel
 > 3. Validate the confirmed project dir on the laptop and prompt again if it needs correction
 > 4. Mount it on the remote box
 > 5. Launch the agent on the remote — your terminal becomes the session
 >    (the agent is told the code is a mount and to run builds/tests/linters back on your laptop)
 >
-> When you exit, the mount and tunnel are torn down automatically. Run `/remote-harness` again
-> anytime to reconnect.
+> When you exit, the mount and tunnel are torn down automatically. Start remote-harness again
+> anytime to reconnect (`/remote-harness` in Claude Code/opencode, `$remote-harness` in Codex).
 
 **Your turn ends here.** The laptop-setup.sh script is self-contained and interactive —
 it drives the rest of the flow on the user's machine. Do NOT AskUserQuestion about directories
@@ -178,6 +187,18 @@ as `<ALIAS>` and derive `<CONNECT>` / `<HOST>` from the existing alias or re-ask
 ### Troubleshooting (if the user reports problems after running the command)
 
 - **RemoteForward port not visible** → multiplexed master reuse: `ssh -O exit <host>`, reconnect.
+- **Plain `ssh <host>` fails with `remote port forwarding failed ...`** → an older harness run may
+  have written `RemoteForward` into the user's normal SSH alias. Current `laptop-setup.sh` creates a
+  dedicated harness alias and removes that legacy line on the next run. Until then, connect with
+  `ssh -o ClearAllForwardings=yes <host>` or remove the stale `RemoteForward` line manually.
+- **`remote port forwarding failed for listen port <PORT>` before setup starts** → the fetch used an
+  older command template without `-o ClearAllForwardings=yes`, so SSH tried to request the existing
+  `RemoteForward` while downloading the scripts. Re-run `$remote-harness` after updating/installing
+  this skill; the generated fetch lines now disable forwarding.
+- **Remote port already listening but alias does not reach laptop** → another/stale tunnel owns the
+  port. Current `laptop-setup.sh` tries the next free port automatically and updates both sides. If
+  it cannot find/configure a free port, close that SSH session, or if it is a multiplexed master run
+  `ssh -O exit <host>`, then rerun.
 - **Mount fails** with `STATUS=failed` → tunnel may not be up yet; wait a few seconds and retry
   the script. Or check `BOX_ALIAS` is the right alias on the box (`ssh <ALIAS> hostname` from box).
 - **sshfs not installed on box** → the script offers to retry after the user installs it (the
@@ -185,5 +206,5 @@ as `<ALIAS>` and derive `<CONNECT>` / `<HOST>` from the existing alias or re-ask
 - **Password prompt when launching the agent** → wrong key or sshd off on laptop.
 - **Files become unreadable mid-session / "Transport endpoint is not connected"** → the tunnel
   dropped (e.g. laptop slept), so the sshfs mount went stale. Exit the agent and re-run
-  `/remote-harness` — laptop-setup now detects the dead mount and remounts fresh (it no longer
-  reuses a stale mount).
+  remote-harness — laptop-setup now detects the dead mount and remounts fresh (it no longer reuses a
+  stale mount). In Codex, invoke it as `$remote-harness`.

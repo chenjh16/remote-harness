@@ -174,7 +174,7 @@ say "  Exit ${LAUNCH} to unmount and return."
 sep
 # Subshell + exec: the agent replaces the subshell (gets the tty) while THIS script waits, so the
 # cleanup trap still fires on exit. Login+interactive shell so ~/.local/bin CLIs resolve. The
-# RH_LAUNCH_ENV prefix (CODEX_HOME=/OPENCODE_CONFIG=) in EFF_LAUNCH uses the VAR=val form, which
+# RH_LAUNCH_ENV prefix (currently OPENCODE_CONFIG=; Codex uses -c developer_instructions) in EFF_LAUNCH uses the VAR=val form, which
 # fish/csh/tcsh do not support — guard to bash/zsh so the env-prefix reliably reaches the agent.
 _launch_shell="${SHELL:-/bin/bash}"
 case "$(basename "$_launch_shell")" in fish|csh|tcsh) _launch_shell=bash;; esac

@@ -97,9 +97,11 @@ this box:  ssh <BOX_ALIAS>          → 127.0.0.1:<PORT> → (tunnel) → laptop
 (
   d=$(mktemp -d "${TMPDIR:-/tmp}/rh.XXXXXX") || exit
   trap 'rm -rf "$d"' EXIT
-  ssh <CONNECT_ARGS> 'cat ~/.remote-harness/scripts/_common.sh' \
+  ssh -o ClearAllForwardings=yes <CONNECT_ARGS> \
+    'cat ~/.remote-harness/scripts/_common.sh' \
     >"$d/_common.sh" &&
-  ssh <CONNECT_ARGS> 'cat ~/.remote-harness/scripts/laptop-setup.sh' \
+  ssh -o ClearAllForwardings=yes <CONNECT_ARGS> \
+    'cat ~/.remote-harness/scripts/laptop-setup.sh' \
     >"$d/laptop-setup.sh" &&
   bash "$d/laptop-setup.sh" --host <HOST_Q> --port <PORT> \
     --via <CONNECT_Q> --box-alias <ALIAS_Q> --launch <LAUNCH> \
@@ -107,6 +109,8 @@ this box:  ssh <BOX_ALIAS>          → 127.0.0.1:<PORT> → (tunnel) → laptop
 )
 ```
 （两次 fetch 写入同一个临时目录：`laptop-setup.sh` 从同级目录 source `_common.sh`。笔记本通常没有安装任何工具，因此两个文件必须一起 fetch。）
+（两次 fetch 必须带 `ClearAllForwardings=yes`：用户的 SSH alias 里可能已经有上次写入的 `RemoteForward`，同端口的陈旧/现有隧道不应该阻止脚本下载。）
+Phase 2 中，`laptop-setup.sh` 会确认 `<PORT>` 上的现有监听是否真的连回这台笔记本（hostname + user）。若该端口被另一个或陈旧的隧道占用，它会扫描后续 200 个端口，改写笔记本侧 `RemoteForward`，用 `setup-tunnel.sh` 改写服务器侧 `<ALIAS>`，然后使用第一个空闲端口继续。
 （`mktemp` 避免使用可预测的全局可写路径 `/tmp/rh.sh`；子 shell 的 `trap` 会清理临时目录且不掩盖 fetch/setup 的退出码。）
 - `[--remote-mountpoint '<BOX_MP>']` = 仅在 **1b.5** 中决定包含时才加入（选择 `~/work/<name>` 默认值时省略）。`--project-dir` 应始终传入。两者均须为用户确认的值，不得使用推测值。
 - 每个 `<..._Q>` 占位符都必须使用 `sq()` 语义作为 shell 单词引用，而不是手写简单引号。例如：
@@ -124,14 +128,14 @@ this box:  ssh <BOX_ALIAS>          → 127.0.0.1:<PORT> → (tunnel) → laptop
 告知用户：
 
 > 请在**笔记本上**运行此命令（在本地终端中，不是当前会话）。它将：
-> 1. 在你的 ssh 配置中添加 RemoteForward 行（如有需要，创建 `<BOX_USER>-remote` 别名）
+> 1. 在专用 harness ssh 别名中添加 RemoteForward 行（不再污染你的普通 ssh 别名）
 > 2. 自动重新连接以激活隧道
 > 3. 在笔记本上验证已确认的项目目录；若需要修正，会再次提示
 > 4. 将其挂载到远端服务器上
 > 5. 在远端启动代理 — 你的终端即变为该会话
 >    （代理会被告知代码是一个挂载目录，构建/测试/linter 应在你的笔记本上运行）
 >
-> 退出时，挂载点和隧道将自动销毁。随时运行 `/remote-harness` 即可重新连接。
+> 退出时，挂载点和隧道将自动销毁。随时再次启动 remote-harness 即可重新连接（Claude Code/opencode 用 `/remote-harness`，Codex 用 `$remote-harness`）。
 
 **你的工作到此结束。** `laptop-setup.sh` 脚本是自包含且交互式的 —
 它会在用户的笔记本上自主完成后续流程。**不要**再就目录问题提问用户，也不要等待本会话的进一步确认。
@@ -143,7 +147,12 @@ this box:  ssh <BOX_ALIAS>          → 127.0.0.1:<PORT> → (tunnel) → laptop
 ### 故障排查（用户运行命令后报告问题）
 
 - **RemoteForward 端口不可见** → 多路复用主连接被复用：执行 `ssh -O exit <host>`，然后重新连接。
+- **普通 `ssh <host>` 出现 `remote port forwarding failed ...`** → 旧版 harness 可能把
+  `RemoteForward` 写进了用户的普通 SSH 别名。当前 `laptop-setup.sh` 会创建专用 harness 别名，并在下次运行时移除这条旧配置。临时绕过方式是
+  `ssh -o ClearAllForwardings=yes <host>`，或手动删除旧的 `RemoteForward` 行。
+- **setup 开始前出现 `remote port forwarding failed for listen port <PORT>`** → 使用了旧命令模板，fetch 脚本时没有 `-o ClearAllForwardings=yes`，SSH 在下载脚本前就尝试申请已有 `RemoteForward`。更新/重新安装本 skill 后重新运行 `$remote-harness`；新命令的 fetch 行会禁用转发。
+- **远端端口已监听但 alias 连不回笔记本** → 另一个或陈旧的隧道占用了该端口。当前 `laptop-setup.sh` 会自动尝试下一个空闲端口，并同步更新两端配置。若找不到或无法配置空闲端口，再关闭对应 SSH 会话；若它是多路复用 master，则运行 `ssh -O exit <host>`，然后重试。
 - **挂载失败**，`STATUS=failed` → 隧道可能尚未就绪；等待几秒后重试脚本。或在服务器上检查 `BOX_ALIAS` 是否为正确别名（在服务器上执行 `ssh <ALIAS> hostname`）。
 - **服务器未安装 sshfs** → 脚本会在用户安装后提示重试（隧道保持不变；无需从 Step 0 重新开始）。
 - **启动代理时出现密码提示** → 密钥错误或笔记本上的 sshd 未运行。
-- **会话中途文件不可读 / "Transport endpoint is not connected"** → 隧道已断开（例如笔记本休眠），sshfs 挂载变为陈旧状态。退出代理后重新运行 `/remote-harness` — `laptop-setup` 现在会检测到失效的挂载并重新挂载（不再复用陈旧挂载）。
+- **会话中途文件不可读 / "Transport endpoint is not connected"** → 隧道已断开（例如笔记本休眠），sshfs 挂载变为陈旧状态。退出代理后重新启动 remote-harness（Codex 用 `$remote-harness`）— `laptop-setup` 现在会检测到失效的挂载并重新挂载（不再复用陈旧挂载）。

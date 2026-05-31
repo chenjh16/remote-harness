@@ -47,11 +47,12 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
   `RH_LAUNCH_FLAGS`:
     - claude   → `RH_LAUNCH_FLAGS=--append-system-prompt-file '<rule>'` (session flag)
     - opencode → `RH_LAUNCH_ENV=OPENCODE_CONFIG='<session cfg>'` (instructions; +`permission:"allow"` if yolo)
-    - codex    → `RH_LAUNCH_ENV=CODEX_HOME='<session home>'` (real auth/config symlinked; our `AGENTS.md`;
-      non-yolo also gets `RH_LAUNCH_FLAGS=-s workspace-write -c sandbox_workspace_write.network_access=true
+    - codex    → `RH_LAUNCH_FLAGS=-c 'developer_instructions="<rule>"'` (session-only CLI config;
+      leaves the real `CODEX_HOME` in place so keyring-backed ChatGPT auth still works). Non-yolo also gets
+      `-s workspace-write -c sandbox_workspace_write.network_access=true
       -c 'sandbox_workspace_write.writable_roots=["~/.ssh"]'` so the sandbox permits the rule's outbound ssh
       AND lets ssh write its ControlMaster socket / known_hosts under `~/.ssh` — `-s` is required, the
-      sub-table is ignored at the implicit default. For heavy/long codex sessions `/remote-harness yolo`
+      sub-table is ignored at the implicit default. For heavy/long codex sessions `$remote-harness yolo`
       (drops the sandbox) is still simplest.)
   The rule says the cwd is an sshfs mount of `<code_path>` on `<host_alias>` and to run
   builds/tests/linters/installs/the app **on `<host_alias>`** via `ssh <host_alias> 'cd <code_path>

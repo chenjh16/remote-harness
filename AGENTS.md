@@ -18,8 +18,8 @@ is for agents *developing* remote-harness itself.
   are the orchestrators; `mount-project.sh` + `inject-rule.sh` + `list-projects.sh` are reused by both.
 - `adapters/{codex,opencode}.md` — per-agent notes. `opencode.md` is installed as opencode's custom
   command; `codex.md` is reference-only (Codex has no custom slash commands, so manage.sh installs the
-  shared `SKILL.md` as a native Codex **skill** under `$CODEX_HOME/skills/`). Both just tell the agent
-  to read `SKILL.md` and pass the right `--launch`.
+  shared `SKILL.md` as a native Codex **skill** under `$CODEX_HOME/skills/`, invoked as
+  `$remote-harness`). Both just tell the agent to read `SKILL.md` and pass the right `--launch`.
 - `manage.sh` — install (copy) / `--dev` (symlink) / `--uninstall`. Installs the core to
   `~/.remote-harness/{SKILL.md,scripts/,reference/}` plus the three per-agent entry files.
 

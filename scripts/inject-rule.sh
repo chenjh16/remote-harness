@@ -8,10 +8,9 @@
 #              beyond the box-side rule file; never touches the mounted repo)
 #   opencode → OPENCODE_CONFIG=<session config: instructions[+permission=allow if yolo]>  (env;
 #              never touches the mounted repo)
-#   codex    → CODEX_HOME=<session home>  (env; codex relocates auth/config/state under CODEX_HOME
-#              — `codex doctor` confirms CODEX_HOME is honored — and reads $CODEX_HOME/AGENTS.md as
-#              home-level global instructions). We symlink your real ~/.codex into the session home
-#              and compose AGENTS.md = your global AGENTS.md + our rule, so only THIS launch sees it.
+#   codex    → -c developer_instructions=<rule>  (session-only CLI config; avoids changing
+#              CODEX_HOME, because modern Codex can store ChatGPT credentials in an encrypted
+#              keyring keyed by the real home and would prompt for login under a synthetic home).
 #              Also passes `-s workspace-write -c sandbox_workspace_write.network_access=true -c
 #              sandbox_workspace_write.writable_roots=["~/.ssh"]` because codex's default sandbox
 #              blocks network and keeps ~/.ssh read-only — otherwise the rule's `ssh <box> ...` to the
@@ -68,6 +67,20 @@ detect_cmds() {
   else
     printf '<install deps>\n<build>\n<test>\n'
   fi
+}
+
+toml_basic_string_file() {
+  awk '
+    BEGIN { printf "\"" }
+    {
+      gsub(/\\/, "\\\\")
+      gsub(/"/, "\\\"")
+      gsub(/\t/, "\\t")
+      printf "%s%s", sep, $0
+      sep="\\n"
+    }
+    END { printf "\"" }
+  ' "$1"
 }
 
 write_rule() {  # $1=outfile  $2=code_path (on $3)  $3=host_alias (where code lives)  $4=mountpoint
@@ -131,22 +144,8 @@ case "${1:-}" in
         env_out="OPENCODE_CONFIG=$(sq "$CFG")"
         ;;
       codex)
-        # Per-session CODEX_HOME: symlink the real ~/.codex entries (auth.json, config.toml, state
-        # DBs, ...) so codex authenticates and persists normally, but supply our composed AGENTS.md
-        # as the home-level global instructions. Scoped to this launch's env; no global/repo writes.
-        CH="$SD/codex-home"; mkdir -p "$CH"
-        if [ -d "$HOME/.codex" ]; then
-          for x in "$HOME/.codex"/* "$HOME/.codex"/.[!.]*; do
-            [ -e "$x" ] || continue
-            bn="$(basename "$x")"
-            case "$bn" in AGENTS.md|AGENTS.override.md) continue;; esac   # composed below, not symlinked
-            ln -sfn "$x" "$CH/$bn" 2>/dev/null || true
-          done
-        fi
-        # Preserve the user's personal global guidance AND append our rule (don't silently drop it).
-        { [ -f "$HOME/.codex/AGENTS.md" ] && { cat "$HOME/.codex/AGENTS.md"; printf '\n\n'; }
-          cat "$RULE"; } > "$CH/AGENTS.md" 2>/dev/null || cp "$RULE" "$CH/AGENTS.md"
-        env_out="CODEX_HOME=$(sq "$CH")"
+        dev_cfg="developer_instructions=$(toml_basic_string_file "$RULE")"
+        flags_out="-c $(sq "$dev_cfg")"
         # codex's default sandbox gates network, which blocks the rule's `ssh <host> ...`. The
         # `[sandbox_workspace_write]` sub-table only merges when workspace-write is EXPLICITLY
         # selected, so `-s workspace-write` is required — `network_access` alone at the implicit
@@ -157,9 +156,9 @@ case "${1:-}" in
         # (notably in reverse, where the box→host master isn't pre-warmed). So we add ~/.ssh to
         # writable_roots. The value is single-quoted so its inner double quotes survive the launch
         # shell's `-lic` re-parse and reach codex's TOML parser as ["~/.ssh"] (a bare [~/.ssh] is
-        # invalid TOML). For heavy/long codex sessions `/remote-harness yolo` (drops the sandbox) is
+        # invalid TOML). For heavy/long codex sessions `$remote-harness yolo` (drops the sandbox) is
         # still simpler. Verify writable_roots ~ expansion on real codex.
-        [ "$yolo" = 1 ] && flags_out="" || flags_out="-s workspace-write -c sandbox_workspace_write.network_access=true -c $(sq 'sandbox_workspace_write.writable_roots=["~/.ssh"]')"
+        [ "$yolo" = 1 ] || flags_out="$flags_out -s workspace-write -c sandbox_workspace_write.network_access=true -c $(sq 'sandbox_workspace_write.writable_roots=["~/.ssh"]')"
         ;;
     esac
     printf 'RH_STATUS=INJECTED\n'

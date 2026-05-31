@@ -76,7 +76,8 @@ Tell the user:
 > 2. sshfs-mount the server's project onto a local dir
 > 3. Launch the agent there — builds/tests run on the server (`ssh <alias> ...`), your edits are live
 >
-> When you exit, the mount is removed automatically. Re-run `/remote-harness` to reconnect.
+> When you exit, the mount is removed automatically. Start remote-harness again to reconnect
+> (`/remote-harness` in Claude Code/opencode, `$remote-harness` in Codex).
 
 **Your turn ends here** — `local-setup.sh` is self-contained and interactive on the local side.
 

@@ -100,7 +100,7 @@ def main() -> int:
     parser.add_argument(
         "--prompt",
         default=(
-            "remote-harness 启用yolo，中文。请完整执行 remote-harness 流程。"
+            "$remote-harness yolo模式，中文。请完整执行 remote-harness 流程。"
             "YOLO 意图明确，不要为 yolo 额外提问；需要 AskUserQuestion 的确认项必须"
             "优先使用 request_user_input 结构化选择；最终只输出让我在本地运行的一条命令，"
             "不要实际运行这条最终命令。"
