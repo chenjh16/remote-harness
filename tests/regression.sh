@@ -128,8 +128,8 @@ assert_grep "$setup_home/.ssh/config" "    RemoteForward 32022 127.0.0.1:22" "se
 
 cat > "$tmp/bin/ssh" <<'EOS'
 #!/usr/bin/env bash
-if [ "${1:-}" = "-G" ] && [ "${2:-}" = "intellios" ]; then
-  printf 'user intellios\nhostname 168.119.12.251\nport 22\nidentityfile ~/.ssh/id_ed25519\n'
+if [ "${1:-}" = "-G" ] && [ "${2:-}" = "mybox" ]; then
+  printf 'user mybox\nhostname 203.0.113.7\nport 22\nidentityfile ~/.ssh/id_ed25519\n'
   exit 0
 fi
 exit 0
@@ -138,10 +138,10 @@ chmod +x "$tmp/bin/ssh"
 alias_home="$tmp/alias-home"
 mkdir -p "$alias_home/.ssh"
 cat > "$alias_home/.ssh/config" <<'EOF'
-Host intellios
-    HostName 168.119.12.251
-    User intellios
-    RemoteForward 32722 127.0.0.1:22
+Host mybox
+    HostName 203.0.113.7
+    User mybox
+    RemoteForward 22022 127.0.0.1:22
     ServerAliveInterval 30
     ServerAliveCountMax 3
     ExitOnForwardFailure yes
@@ -149,18 +149,18 @@ Host intellios
 EOF
 HOME="$alias_home" PATH="$tmp/bin:$PATH" RH_COMMON="$ROOT/scripts/_common.sh" \
   bash "$ROOT/scripts/laptop-setup.sh" \
-    --host intellios --port 32722 --via "intellios" \
+    --host mybox --port 22022 --via "mybox" \
     --pubkey "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest remote-harness@test" \
     --box-alias laptop --setup-only --yes > "$tmp/setup-alias.out"
-assert_grep "$alias_home/.ssh/config" "Host intellios-remote-harness" "dedicated harness alias"
-assert_grep "$alias_home/.ssh/config" "    HostName 168.119.12.251" "dedicated alias resolved hostname"
-assert_grep "$alias_home/.ssh/config" "    RemoteForward 32722 127.0.0.1:22" "dedicated alias remote forward"
+assert_grep "$alias_home/.ssh/config" "Host mybox-remote-harness" "dedicated harness alias"
+assert_grep "$alias_home/.ssh/config" "    HostName 203.0.113.7" "dedicated alias resolved hostname"
+assert_grep "$alias_home/.ssh/config" "    RemoteForward 22022 127.0.0.1:22" "dedicated alias remote forward"
 if awk '
-  /^[ \t]*[Hh][Oo][Ss][Tt][ \t]/{hit=($2=="intellios")}
-  hit&&/^[ \t]*RemoteForward[ \t]+32722[ \t]+127\.0\.0\.1:22/ {found=1}
+  /^[ \t]*[Hh][Oo][Ss][Tt][ \t]/{hit=($2=="mybox")}
+  hit&&/^[ \t]*RemoteForward[ \t]+22022[ \t]+127\.0\.0\.1:22/ {found=1}
   END{exit !found}
 ' "$alias_home/.ssh/config"; then
-  fail "legacy Host intellios still carries remote-harness RemoteForward"
+  fail "legacy Host mybox still carries remote-harness RemoteForward"
 fi
 
 if HOME="$tmp/unsafe-rh" RH_HOME=/ bash "$ROOT/manage.sh" --uninstall >/dev/null 2>"$tmp/manage-rh-root.err"; then

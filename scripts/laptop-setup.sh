@@ -240,8 +240,8 @@ $(printf '%s\n' "$_cfg" | awk 'tolower($1)=="identityfile"{print $2}')
 EOF
 }
 # The --via connection is the GROUND TRUTH for how to reach the box. Use a DEDICATED managed alias
-# for the harness connection even when --via is a normal `Host intellios` alias; otherwise ordinary
-# `ssh intellios` inherits RemoteForward and fails while a harness tunnel already owns the port.
+# for the harness connection even when --via is a normal `Host <alias>` alias; otherwise ordinary
+# `ssh <alias>` inherits RemoteForward and fails while a harness tunnel already owns the port.
 cp "$CFG" "$CFG.rh-bak.$(date +%Y%m%d%H%M%S 2>/dev/null || echo bak)" 2>/dev/null || true
 RAW_CONN=0; { [ -n "$V_PORT" ] || [ -n "$V_USER" ] || [ -n "$V_IDENTITY" ] || [ -n "$V_PROXYJUMP" ]; } && RAW_CONN=1
 if [ "$RAW_CONN" = 0 ] && [ -n "$HOST" ] && block_exists "$HOST"; then
