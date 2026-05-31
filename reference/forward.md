@@ -55,7 +55,7 @@ Print **exactly** (short, `\`-continued lines):
   --via '<CONNECT>' --remote-path '<REMOTE_PROJECT_DIR>' \
   [--mountpoint '<LOCAL_MP>'] --launch <LAUNCH> [--yolo]
 ```
-- `<LAUNCH>` = the CLI of the agent you are running in (claude/codex/opencode; the adapters say which).
+- `<LAUNCH>` = the CLI of the agent you are running in (claude/codex/opencode).
 - `[--yolo]` only if the user asked to bypass approvals.
 
 Tell the user:

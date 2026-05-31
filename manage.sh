@@ -15,7 +15,7 @@ set -euo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RH_HOME="${RH_HOME:-$HOME/.remote-harness}"
 CLAUDE_DIR="$HOME/.claude/skills/remote-harness"          # Claude Code: native Agent Skill
-CODEX_FILE="$HOME/.codex/prompts/remote-harness.md"       # Codex: custom prompt (/remote-harness)
+CODEX_DIR="${CODEX_HOME:-$HOME/.codex}/skills/remote-harness"     # Codex: native skill (type: remote-harness)
 OPENCODE_FILE="$HOME/.config/opencode/command/remote-harness.md"  # opencode: custom command
 
 usage() { sed -n '4,12p' "${BASH_SOURCE[0]}" | cut -c3-; }
@@ -53,7 +53,7 @@ rm_path() {  # remove a file/dir/symlink if present (symlinks unlinked, never fo
 if [ "$ACTION" = uninstall ]; then
   echo "remote-harness uninstall (targets:$targets)"
   want claude   && rm_path "$CLAUDE_DIR"    || true
-  want codex    && rm_path "$CODEX_FILE"    || true
+  want codex    && rm_path "$CODEX_DIR"     || true
   want opencode && rm_path "$OPENCODE_FILE" || true
   # Drop the shared core only when removing everything (other launchers still reference it).
   if want claude && want codex && want opencode; then rm_path "$RH_HOME"; fi
@@ -80,8 +80,11 @@ if want claude; then
   echo "  ✓ Claude Code skill ($MODE) → $CLAUDE_DIR/SKILL.md"
 fi
 if want codex; then
-  place_file "$SRC/adapters/codex.md" "$CODEX_FILE"
-  echo "  ✓ Codex prompt ($MODE)      → $CODEX_FILE"
+  # codex-cli has no custom /slash commands; it loads native skills from $CODEX_HOME/skills/<name>/.
+  # Install the shared SKILL.md as a skill — invoke by TYPING `remote-harness` (no slash).
+  rm -rf "$CODEX_DIR"; mkdir -p "$CODEX_DIR"
+  place_file "$SRC/SKILL.md" "$CODEX_DIR/SKILL.md"
+  echo "  ✓ Codex skill ($MODE)       → $CODEX_DIR/SKILL.md  (invoke: type 'remote-harness', no slash)"
 fi
 if want opencode; then
   place_file "$SRC/adapters/opencode.md" "$OPENCODE_FILE"
@@ -90,5 +93,5 @@ fi
 
 echo
 [ "$MODE" = dev ] && echo "DEV install: edits in $SRC are live immediately." || true
-echo "Done. Inside your coding agent (on the remote box OR locally), run:  /remote-harness"
+echo "Done. Start it in your agent:  /remote-harness  (Claude Code / opencode)  ·  type 'remote-harness' (no slash) in Codex"
 echo "  reverse: agent on a remote box, code on your laptop  |  forward: agent local, code on a remote server"

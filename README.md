@@ -76,12 +76,12 @@
 |---|---|---|
 | 共享核心 | `~/.remote-harness/{SKILL.md, scripts/, reference/}` | (各方共用) |
 | Claude Code | `~/.claude/skills/remote-harness/SKILL.md` | `/remote-harness` |
-| Codex | `~/.codex/prompts/remote-harness.md` | `/remote-harness` |
+| Codex | `~/.codex/skills/remote-harness/SKILL.md` | 输入 `remote-harness`(无斜杠) |
 | opencode | `~/.config/opencode/command/remote-harness.md` | `/remote-harness` |
 
 **脚本**是唯一的单一事实来源——各 Agent 都调用 `~/.remote-harness/scripts/*`。每个 Agent 的入口
-文件按其支持的形态不同:Claude Code 是原生 *skill*(自带一份 `SKILL.md`),Codex/opencode 是
-让 Agent 去读共享 `SKILL.md` 的薄适配层。
+形态不同:Claude Code 与 Codex 都是原生 *skill*(共用同一份 `SKILL.md`;Codex 无自定义斜杠命令,故输入
+`remote-harness` 触发),opencode 是让 Agent 去读共享 `SKILL.md` 的自定义命令。
 
 ### 使用
 
@@ -204,12 +204,13 @@ in the mount.**
 |---|---|---|
 | shared core | `~/.remote-harness/{SKILL.md, scripts/, reference/}` | (used by all) |
 | Claude Code | `~/.claude/skills/remote-harness/SKILL.md` | `/remote-harness` |
-| Codex | `~/.codex/prompts/remote-harness.md` | `/remote-harness` |
+| Codex | `~/.codex/skills/remote-harness/SKILL.md` | type `remote-harness` (no slash) |
 | opencode | `~/.config/opencode/command/remote-harness.md` | `/remote-harness` |
 
 The **scripts** are the single source of truth — every agent calls `~/.remote-harness/scripts/*`.
-Each agent's entry file differs by what it supports: Claude Code has a native *skill*; Codex/opencode
-are thin adapters that read the shared `SKILL.md`.
+Each agent's entry differs by what it supports: Claude Code and Codex both use a native *skill* (the
+shared `SKILL.md`; Codex has no custom slash commands, so you type `remote-harness`); opencode is a
+custom command that reads the shared `SKILL.md`.
 
 ### Usage
 

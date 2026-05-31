@@ -11,7 +11,7 @@
 - `SKILL.md` — 精简的技能入口（概述、交互规则、方向选择）。**渐进式披露**：每个方向的流程及脚本契约位于 `reference/` 下。
 - `reference/{reverse,forward,scripts}.md` — 详细流程与辅助脚本契约，由智能体在运行时按需通过 `$RH/reference/<file>.md`（`RH=${RH_HOME:-$HOME/.remote-harness}`）读取。
 - `scripts/*.sh` — 确定性辅助脚本（stdout 输出 `KEY=VALUE`，stderr 输出说明信息）。`_common.sh` 是被 source 的公共库（非入口脚本）。`laptop-setup.sh`（reverse 方向）/ `local-setup.sh`（forward 方向）是编排器；`mount-project.sh`、`inject-rule.sh`、`list-projects.sh` 两个方向共用。
-- `adapters/{codex,opencode}.md` — 各智能体专属入口文件（Codex 提示词 / opencode 命令）。它们只需告知智能体读取 `SKILL.md` 并传入正确的 `--launch`。
+- `adapters/{codex,opencode}.md` — 各智能体专属说明。`opencode.md` 装成 opencode 的自定义命令；`codex.md` 仅供参考（Codex 没有自定义斜杠命令，所以 manage.sh 把共享的 `SKILL.md` 作为 Codex 原生**技能**装到 `$CODEX_HOME/skills/` 下）。两者都只是告知智能体读取 `SKILL.md` 并传入正确的 `--launch`。
 - `manage.sh` — 安装（拷贝）/ `--dev`（符号链接）/ `--uninstall`。将核心安装到 `~/.remote-harness/{SKILL.md,scripts/,reference/}`，并安装三个智能体专属入口文件。
 
 ## 两种方向（核心模型）

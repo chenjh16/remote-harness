@@ -46,7 +46,7 @@ Agent（即你）运行在用户的**本地机器**上；项目位于本机可�
   --via '<CONNECT>' --remote-path '<REMOTE_PROJECT_DIR>' \
   [--mountpoint '<LOCAL_MP>'] --launch <LAUNCH> [--yolo]
 ```
-- `<LAUNCH>` = 当前 Agent 的 CLI 名称（claude/codex/opencode；各适配器中有说明）。
+- `<LAUNCH>` = 当前 Agent 的 CLI 名称（claude/codex/opencode）。
 - `[--yolo]` 仅在用户要求跳过审批时添加。
 
 告知用户：

@@ -103,7 +103,7 @@ d=$(mktemp -d "${TMPDIR:-/tmp}/rh.XXXXXX") \
 - `<CONNECT>` = 不带前导 `ssh` 的 ssh 参数，例如 `-p 2222 you@203.0.113.20`。
   传给初始 `ssh` 调用和 `--via` 的值必须完全一致。
 - `<LAUNCH>` = 在远端启动的**纯**编程代理 CLI — **即当前运行你（助手）的 CLI**：`claude`（Claude Code）、`codex`（Codex）、`opencode`（opencode）。
-  （默认为 `claude`；Codex/opencode 适配器会告知你该用哪个。）远端服务器必须已安装该 CLI。
+  （默认为 `claude`；用你当前正在运行的那个 CLI。）远端服务器必须已安装该 CLI。
   laptop-setup 通过**登录 shell**（`exec "${SHELL:-/bin/bash}" -lic ...`）启动它，因此位于 `~/.local/bin`（由 `~/.profile`/`~/.zshrc` 加入 PATH）的 CLI 无需完整路径即可找到。
 - **YOLO / 跳过审批：** 若用户有此请求（参见 SKILL.md 中的"调用选项"），添加 **`--yolo`**。
   `laptop-setup.sh` 会按代理类型应用对应的跳过方式：claude →

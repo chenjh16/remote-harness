@@ -120,7 +120,7 @@ usually has no install, so both files must be fetched together.)
   Pass exactly the same value to both the initial `ssh` call and `--via`.
 - `<LAUNCH>` = the **bare** coding-agent CLI to start on the remote — **the CLI of the agent you
   (the assistant) are running in**: `claude` (Claude Code), `codex` (Codex), `opencode` (opencode).
-  (Default `claude`; the Codex/opencode adapters tell you which.) The remote box must have it installed.
+  (Default `claude`; use the CLI you are running in.) The remote box must have it installed.
   laptop-setup launches it through a **login shell** (`exec "${SHELL:-/bin/bash}" -lic ...`), so a CLI
   in `~/.local/bin` (added to PATH by `~/.profile`/`~/.zshrc`) is found without a full path.
 - **YOLO / bypass approvals:** if requested (see SKILL.md "Invocation options"), add **`--yolo`**.
