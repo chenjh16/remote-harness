@@ -287,14 +287,17 @@ hdr "Phase 3: select a laptop project directory"
 pick_dir() {
   local result="" def="$PWD"
   printf '  Project dir [%s]: ' "$def" >/dev/tty
-  # `read -i` (prefill the editable line) is bash 4+; macOS ships bash 3.2, so only use it there.
-  # Either way the default is shown in the prompt above and an empty reply falls back to it.
-  if [ "${BASH_VERSINFO:-0}" -ge 4 ]; then
-    IFS= read -r -e -i "$def" result </dev/tty 2>/dev/null \
-      || IFS= read -r result </dev/tty 2>/dev/null || IFS= read -r result
+  # Read the path from the controlling terminal. Two deliberate choices:
+  #  - NO `-i` prefill: a prefilled editable default makes a PASTED absolute path APPEND to it
+  #    (e.g. /Users/me + /srv/app → /Users/me/srv/app). The default is shown in the prompt above and
+  #    an empty reply falls back to it, so prefilling buys nothing and breaks pasting.
+  #  - NO `2>/dev/null` on the readline read: `read -e` echoes typed characters on STDERR, so
+  #    redirecting stderr to /dev/null makes your input INVISIBLE as you type.
+  # (Plain `read -e`, no `-i`, works the same on bash 3.2 and 4+, so no version branch is needed.)
+  if [ -r /dev/tty ]; then
+    IFS= read -r -e result </dev/tty || IFS= read -r result </dev/tty
   else
-    IFS= read -r -e result </dev/tty 2>/dev/null \
-      || IFS= read -r result </dev/tty 2>/dev/null || IFS= read -r result
+    IFS= read -r result
   fi
   [ -z "$result" ] && result="$def"
   result="${result/#\~/$HOME}"
