@@ -6,6 +6,7 @@
 # For the reverse flow the skill's one-command fetches THIS file next to laptop-setup.sh so the
 # laptop (which usually has no install) still finds it. Sets colors + OS vars at source time and
 # defines output/quoting/ssh-config helpers. Sourced files must NOT set -e or exit.
+# shellcheck disable=SC2034 # this library intentionally sets variables for callers.
 
 # ---- colors (ANSI, only when stdout is a real terminal) --------------------
 if [ -t 1 ] && command -v tput >/dev/null 2>&1 && tput colors >/dev/null 2>&1 \
@@ -41,6 +42,30 @@ ask() {
 # breaking — or injecting into — the ssh command strings the setup scripts build.
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
+need_arg() {
+  if [ -z "${2+x}" ] || [ -z "$2" ]; then
+    printf 'missing value for %s\n' "$1" >&2
+    return 2
+  fi
+  return 0
+}
+
+safe_ssh_token() {
+  case "${1:-}" in
+    ""|-*|*[[:space:]]*) return 1;;
+    *) return 0;;
+  esac
+}
+
+ssh_config_value() {
+  case "$1" in
+    *[[:space:]\"\\]*)
+      printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+      ;;
+    *) printf '%s' "$1";;
+  esac
+}
+
 # ---- OS detection (sets OS / PLAT / IS_WSL at source time) -----------------
 OS="$(uname -s 2>/dev/null || echo unknown)"; IS_WSL=0
 case "$OS" in
@@ -49,22 +74,56 @@ case "$OS" in
   *)      PLAT=other;;
 esac
 
-# ---- parse an ssh-args / alias string into V_HOST/V_PORT/V_USER/V_IDENTITY --
-# Accepts either a bare alias ("myserver") or raw args ("-p 2222 user@host -i ~/.k"). The value is
-# intentionally word-split (unquoted) — NOT eval'd — so a crafted/mistyped string can't run locally.
+# ---- parse an ssh-args / alias string into V_* fields ----------------------
+# Accepts either a bare alias ("myserver") or raw args ("-J jump -p 2222 user@host -i ~/.k"). The
+# value is intentionally word-split (unquoted) — NOT eval'd — so a crafted/mistyped string can't run
+# locally. Quoted ProxyCommand-style values with spaces are not supported; use a Host alias for that.
+parse_ssh_option() {
+  local _pso_name _pso_value
+  _pso_name="${1%%=*}"
+  _pso_value="${1#*=}"
+  [ "$_pso_name" = "$1" ] && _pso_value=""
+  case "$(printf '%s' "$_pso_name" | LC_ALL=C tr '[:upper:]' '[:lower:]')" in
+    hostname)     [ -n "$_pso_value" ] && V_HOST="$_pso_value";;
+    port)         [ -n "$_pso_value" ] && V_PORT="$_pso_value";;
+    user)         [ -n "$_pso_value" ] && V_USER="$_pso_value";;
+    identityfile) [ -n "$_pso_value" ] && V_IDENTITY="$_pso_value";;
+    proxyjump)    [ -n "$_pso_value" ] && V_PROXYJUMP="$_pso_value";;
+    *)            V_UNSUPPORTED_SSH_OPTIONS="${V_UNSUPPORTED_SSH_OPTIONS:-} -o $_pso_name";;
+  esac
+}
 parse_via() {
-  V_HOST="" V_PORT="" V_USER="" V_IDENTITY=""
+  V_HOST="" V_PORT="" V_USER="" V_IDENTITY="" V_PROXYJUMP="" V_UNSUPPORTED_SSH_OPTIONS=""
   [ -n "${1:-}" ] || return 0
+  # shellcheck disable=SC2086 # intentional ssh-arg word splitting; never eval'd.
   set -- $1
   [ "${1:-}" = "ssh" ] && shift
   while [ $# -gt 0 ]; do
     case "$1" in
-      -p)  V_PORT="${2:-}"; shift 2 || shift;;
+      -p)  if [ $# -ge 2 ]; then V_PORT="$2"; shift 2; else V_UNSUPPORTED_SSH_OPTIONS="${V_UNSUPPORTED_SSH_OPTIONS:-} -p"; shift; fi;;
       -p*) V_PORT="${1#-p}"; shift;;
-      -l)  V_USER="${2:-}"; shift 2 || shift;;
-      -i)  V_IDENTITY="${2:-}"; shift 2 || shift;;
+      -l)  if [ $# -ge 2 ]; then V_USER="$2"; shift 2; else V_UNSUPPORTED_SSH_OPTIONS="${V_UNSUPPORTED_SSH_OPTIONS:-} -l"; shift; fi;;
+      -i)  if [ $# -ge 2 ]; then V_IDENTITY="$2"; shift 2; else V_UNSUPPORTED_SSH_OPTIONS="${V_UNSUPPORTED_SSH_OPTIONS:-} -i"; shift; fi;;
       -i*) V_IDENTITY="${1#-i}"; shift;;
-      -o|-F|-J|-b|-c|-m|-w|-D|-L|-R|-W|-E|-Q|-S) shift 2 || shift;;
+      -J)  if [ $# -ge 2 ]; then V_PROXYJUMP="$2"; shift 2; else V_UNSUPPORTED_SSH_OPTIONS="${V_UNSUPPORTED_SSH_OPTIONS:-} -J"; shift; fi;;
+      -J*) V_PROXYJUMP="${1#-J}"; shift;;
+      -o)
+        if [ -n "${2:-}" ]; then
+          case "$2" in
+            *=*) parse_ssh_option "$2"; shift 2;;
+            HostName|hostname|Port|port|User|user|IdentityFile|identityfile|ProxyJump|proxyjump)
+              if [ $# -ge 3 ]; then parse_ssh_option "$2=$3"; shift 3
+              else V_UNSUPPORTED_SSH_OPTIONS="${V_UNSUPPORTED_SSH_OPTIONS:-} -o $2"; shift $#; fi;;
+            *) V_UNSUPPORTED_SSH_OPTIONS="${V_UNSUPPORTED_SSH_OPTIONS:-} -o $2"; if [ $# -ge 2 ]; then shift 2; else shift; fi;;
+          esac
+        else
+          shift
+        fi
+        ;;
+      -o*) parse_ssh_option "${1#-o}"; shift;;
+      -F|-b|-c|-m|-w|-D|-L|-R|-W|-E|-Q|-S)
+        V_UNSUPPORTED_SSH_OPTIONS="${V_UNSUPPORTED_SSH_OPTIONS:-} $1"
+        if [ $# -ge 2 ]; then shift 2; else shift; fi;;
       -*)  shift;;
       *)   if [ -z "$V_HOST" ]; then case "$1" in *@*) V_USER="${1%@*}"; V_HOST="${1##*@}";; *) V_HOST="$1";; esac; fi; shift;;
     esac
@@ -85,12 +144,17 @@ remove_host_block() {
 # ControlMaster/keepalive lines). Idempotent (removes any prior block of the same name first).
 write_managed_alias() {
   _wma_alias="$1"; shift
+  safe_ssh_token "$_wma_alias" || { printf 'unsafe ssh Host alias: %s\n' "$_wma_alias" >&2; return 2; }
+  [ -z "${V_HOST:-}" ] || safe_ssh_token "$V_HOST" || { printf 'unsafe ssh HostName: %s\n' "$V_HOST" >&2; return 2; }
+  [ -z "${V_USER:-}" ] || safe_ssh_token "$V_USER" || { printf 'unsafe ssh User: %s\n' "$V_USER" >&2; return 2; }
+  [ -z "${V_PROXYJUMP:-}" ] || safe_ssh_token "$V_PROXYJUMP" || { printf 'unsafe ssh ProxyJump: %s\n' "$V_PROXYJUMP" >&2; return 2; }
   remove_host_block "$_wma_alias"
   { printf '\nHost %s\n' "$_wma_alias"
-    [ -n "${V_HOST:-}" ]                            && printf '    HostName %s\n' "$V_HOST"
+    [ -n "${V_HOST:-}" ]                            && printf '    HostName %s\n' "$(ssh_config_value "$V_HOST")"
     [ -n "${V_PORT:-}" ] && [ "${V_PORT}" != 22 ]   && printf '    Port %s\n' "$V_PORT"
-    [ -n "${V_USER:-}" ]                            && printf '    User %s\n' "$V_USER"
-    [ -n "${V_IDENTITY:-}" ]                        && printf '    IdentityFile %s\n' "$V_IDENTITY"
+    [ -n "${V_USER:-}" ]                            && printf '    User %s\n' "$(ssh_config_value "$V_USER")"
+    [ -n "${V_IDENTITY:-}" ]                        && printf '    IdentityFile %s\n' "$(ssh_config_value "$V_IDENTITY")"
+    [ -n "${V_PROXYJUMP:-}" ]                       && printf '    ProxyJump %s\n' "$(ssh_config_value "$V_PROXYJUMP")"
     for _wma_line in "$@"; do printf '%s\n' "$_wma_line"; done
   } >> "$CFG"
 }

@@ -19,13 +19,20 @@
 #   --yes                   non-interactive (skip confirm prompts)
 set -uo pipefail
 
+need_arg() {
+  if [ -z "${2+x}" ] || [ -z "$2" ]; then
+    printf 'missing value for %s\n' "$1" >&2
+    exit 2
+  fi
+}
+
 VIA="" RPATH="" MP="" LAUNCH="claude" YOLO=0 ASSUME_YES=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --via)         VIA="$2";        shift 2;;
-    --remote-path) RPATH="$2";      shift 2;;
-    --mountpoint)  MP="$2";         shift 2;;
-    --launch)      LAUNCH="$2";     shift 2;;
+    --via)         need_arg "$1" "${2-}"; VIA="$2";        shift 2;;
+    --remote-path) need_arg "$1" "${2-}"; RPATH="$2";      shift 2;;
+    --mountpoint)  need_arg "$1" "${2-}"; MP="$2";         shift 2;;
+    --launch)      need_arg "$1" "${2-}"; LAUNCH="$2";     shift 2;;
     --yolo)        YOLO=1;          shift;;
     --yes|-y)      ASSUME_YES=1;    shift;;
     *) printf 'unknown arg: %s\n' "$1" >&2; exit 2;;
@@ -36,12 +43,14 @@ done
 
 # Shared helpers (colors, say/ok/warn/ask, sq, OS vars, parse_via, write_managed_alias).
 RH_COMMON="${RH_COMMON:-$(dirname "$0")/_common.sh}"
-if [ -f "$RH_COMMON" ]; then . "$RH_COMMON"
+if [ -f "$RH_COMMON" ]; then
+  # shellcheck source=./_common.sh
+  . "$RH_COMMON"
 else printf 'error: missing _common.sh next to %s\n' "$0" >&2; exit 2; fi
 SCRIPTS="$(dirname "$0")"
 
-LAUNCH_BASE="$(set -- $LAUNCH; echo "${1:-claude}")"
-case "$LAUNCH_BASE" in claude|codex|opencode) ;; *) printf 'unsupported --launch %s\n' "$LAUNCH" >&2; exit 2;; esac
+case "$LAUNCH" in claude|codex|opencode) ;; *) printf 'unsupported --launch %s (expected claude|codex|opencode)\n' "$LAUNCH" >&2; exit 2;; esac
+LAUNCH_BASE="$LAUNCH"
 EFF_LAUNCH="$LAUNCH"
 if [ "$YOLO" = 1 ]; then
   case "$LAUNCH_BASE" in
@@ -71,23 +80,35 @@ cleanup() {
 # ---- resolve the server alias (ground truth = --via) -----------------------
 hdr "Reaching the server"
 parse_via "$VIA"
+[ -z "${V_UNSUPPORTED_SSH_OPTIONS:-}" ] || {
+  printf 'unsupported ssh option(s) in --via:%s\n' "$V_UNSUPPORTED_SSH_OPTIONS" >&2
+  printf 'Put complex ssh options in ~/.ssh/config as a Host alias, then pass that alias.\n' >&2
+  exit 2
+}
+[ -n "$V_HOST" ] || { printf 'could not parse --via into an ssh host/alias\n' >&2; exit 2; }
+safe_ssh_token "$V_HOST" || { printf 'unsafe ssh host in --via: %s\n' "$V_HOST" >&2; exit 2; }
 CFG="$HOME/.ssh/config"; mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh" 2>/dev/null || true
 touch "$CFG"; chmod 600 "$CFG" 2>/dev/null || true
-# Raw connection (explicit user/port/key) → persist a dedicated managed alias carrying those exact
-# params, so sshfs and the rule's `ssh <alias>` are stable. A bare alias/host is used as-is.
-RAW_CONN=0; { [ -n "$V_PORT" ] || [ -n "$V_USER" ] || [ -n "$V_IDENTITY" ]; } && RAW_CONN=1
+# Raw connection (explicit user/port/key/jump host) → persist a dedicated managed alias carrying
+# those exact params, so sshfs and the rule's `ssh <alias>` are stable. A bare alias/host is used
+# as-is.
+RAW_CONN=0; { [ -n "$V_PORT" ] || [ -n "$V_USER" ] || [ -n "$V_IDENTITY" ] || [ -n "$V_PROXYJUMP" ]; } && RAW_CONN=1
 if [ "$RAW_CONN" = 0 ]; then
   SALIAS="$V_HOST"
   ok "Using ssh target: ${_B}$SALIAS${_0}"
 else
   SALIAS="$(printf '%s' "$V_HOST" | LC_ALL=C tr -c 'A-Za-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')-dev"
   cp "$CFG" "$CFG.rh-bak.$(date +%Y%m%d%H%M%S 2>/dev/null || echo bak)" 2>/dev/null || true
-  write_managed_alias "$SALIAS" \
-    "    StrictHostKeyChecking accept-new" \
-    "    ServerAliveInterval 30" "    ServerAliveCountMax 3" \
-    "    ControlMaster auto" "    ControlPath ~/.ssh/cm-%C" "    ControlPersist 5m"
-  chmod 600 "$CFG" 2>/dev/null || true
-  ok "ssh config: wrote managed 'Host $SALIAS' (HostName ${V_HOST:-?}, port ${V_PORT:-22}, user ${V_USER:-<login default>})"
+  if write_managed_alias "$SALIAS" \
+      "    StrictHostKeyChecking accept-new" \
+      "    ServerAliveInterval 30" "    ServerAliveCountMax 3" \
+      "    ControlMaster auto" "    ControlPath ~/.ssh/cm-%C" "    ControlPersist 5m"; then
+    chmod 600 "$CFG" 2>/dev/null || true
+    ok "ssh config: wrote managed 'Host $SALIAS' (HostName ${V_HOST:-?}, port ${V_PORT:-22}, user ${V_USER:-<login default>})"
+  else
+    err "ssh config: could not write managed Host '$SALIAS'"
+    exit 2
+  fi
 fi
 # Reachability (best effort) — warn if it'd prompt for a password (sshfs + builds would too).
 if ssh -o BatchMode=yes -o ConnectTimeout=8 "$SALIAS" true 2>/dev/null; then

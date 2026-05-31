@@ -19,6 +19,31 @@ CODEX_DIR="${CODEX_HOME:-$HOME/.codex}/skills/remote-harness"     # Codex: nativ
 OPENCODE_FILE="$HOME/.config/opencode/command/remote-harness.md"  # opencode: custom command
 
 usage() { sed -n '4,12p' "${BASH_SOURCE[0]}" | cut -c3-; }
+die() { echo "error: $*" >&2; exit 2; }
+clean_path() { printf '%s' "${1%/}"; }
+guard_remove_target() {
+  p="$(clean_path "$1")"
+  [ -n "$p" ] || die "refusing to remove an empty path"
+  [ "$p" != "/" ] || die "refusing to remove /"
+  [ "$p" != "$HOME" ] || die "refusing to remove HOME ($HOME)"
+}
+guard_rh_home() {
+  p="$(clean_path "$1")"
+  [ -n "$p" ] || die "RH_HOME is empty"
+  case "$p" in
+    /*) ;;
+    *) die "RH_HOME must be absolute: $1" ;;
+  esac
+  case "$p" in
+    /|"$HOME"|*/..|*/../*|../*|*'/.'|*'/./'*) die "unsafe RH_HOME: $1" ;;
+  esac
+  base="$(basename "$p")"
+  case "$base" in
+    .remote-harness|remote-harness) ;;
+    *) die "RH_HOME must end in .remote-harness or remote-harness: $1" ;;
+  esac
+}
+guard_rh_home "$RH_HOME"
 
 MODE=copy ACTION=install targets=""
 for a in "$@"; do
@@ -35,11 +60,11 @@ done
 want() { case " $targets " in *" all "*) return 0;; *" $1 "*) return 0;; *) return 1;; esac; }
 
 place_file() {  # src dest — symlink (dev) or copy (production)
-  rm -rf "$2"; mkdir -p "$(dirname "$2")"
+  guard_remove_target "$2"; rm -rf "$2"; mkdir -p "$(dirname "$2")"
   if [ "$MODE" = dev ]; then ln -s "$1" "$2"; else cp "$1" "$2"; fi
 }
 place_scripts() {  # destdir
-  rm -rf "$1"
+  guard_remove_target "$1"; rm -rf "$1"
   if [ "$MODE" = dev ]; then
     mkdir -p "$(dirname "$1")"; ln -s "$SRC/scripts" "$1"
   else
@@ -47,6 +72,7 @@ place_scripts() {  # destdir
   fi
 }
 rm_path() {  # remove a file/dir/symlink if present (symlinks unlinked, never followed)
+  guard_remove_target "$1"
   if [ -e "$1" ] || [ -L "$1" ]; then rm -rf "$1"; echo "  ✓ removed $1"; fi
 }
 
@@ -69,20 +95,20 @@ place_file "$SRC/SKILL.md" "$RH_HOME/SKILL.md"
 place_file "$SRC/SKILL.cn.md" "$RH_HOME/SKILL.cn.md"
 place_scripts "$RH_HOME/scripts"
 # reference docs, read on demand at runtime via $RH/reference/*.md (incl. *.cn.md)
-rm -rf "$RH_HOME/reference"
+guard_remove_target "$RH_HOME/reference"; rm -rf "$RH_HOME/reference"
 if [ "$MODE" = dev ]; then ln -s "$SRC/reference" "$RH_HOME/reference"
 else mkdir -p "$RH_HOME/reference"; cp "$SRC"/reference/*.md "$RH_HOME/reference"/; fi
 echo "  ✓ core ($MODE) → $RH_HOME"
 
 if want claude; then
-  rm -rf "$CLAUDE_DIR"; mkdir -p "$CLAUDE_DIR"
+  guard_remove_target "$CLAUDE_DIR"; rm -rf "$CLAUDE_DIR"; mkdir -p "$CLAUDE_DIR"
   place_file "$SRC/SKILL.md" "$CLAUDE_DIR/SKILL.md"
   echo "  ✓ Claude Code skill ($MODE) → $CLAUDE_DIR/SKILL.md"
 fi
 if want codex; then
   # codex-cli has no custom /slash commands; it loads native skills from $CODEX_HOME/skills/<name>/.
   # Install the shared SKILL.md as a skill — invoke by TYPING `remote-harness` (no slash).
-  rm -rf "$CODEX_DIR"; mkdir -p "$CODEX_DIR"
+  guard_remove_target "$CODEX_DIR"; rm -rf "$CODEX_DIR"; mkdir -p "$CODEX_DIR"
   place_file "$SRC/SKILL.md" "$CODEX_DIR/SKILL.md"
   echo "  ✓ Codex skill ($MODE)       → $CODEX_DIR/SKILL.md  (invoke: type 'remote-harness', no slash)"
 fi

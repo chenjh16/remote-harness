@@ -5,26 +5,40 @@
 # this machine. Read-only. Prints "PROJECT\t<path>\t<git:branch|->" lines, then TOTAL/SHOWN.
 set -uo pipefail
 
+sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+need_arg() {
+  if [ -z "${2+x}" ] || [ -z "$2" ]; then
+    printf 'missing value for %s\n' "$1" >&2
+    exit 2
+  fi
+}
+
 LIMIT=40
 VIA=""
 roots_args=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --via)   VIA="$2"; shift 2;;
-    --root)  roots_args="$roots_args $2"; shift 2;;
-    --limit) LIMIT="$2"; shift 2;;
+    --via)   need_arg "$1" "${2-}"; VIA="$2"; shift 2;;
+    --root)  need_arg "$1" "${2-}"; roots_args="${roots_args}${roots_args:+
+}$2"; shift 2;;
+    --limit) need_arg "$1" "${2-}"; LIMIT="$2"; shift 2;;
     *) shift;;
   esac
 done
+printf '%s' "$LIMIT" | grep -qE '^[0-9]+$' || { printf 'limit must be numeric: %s\n' "$LIMIT" >&2; exit 2; }
 
 # POSIX-sh scan, runs identically locally or on the laptop via `ssh <alias> sh -s`.
-# Inputs via env: RH_LIMIT, RH_ROOTS (space-separated; empty => defaults under $HOME).
+# Inputs via env: RH_LIMIT, RH_ROOTS (newline-separated; empty => defaults under $HOME).
 # NOTE: kept free of sed / single-quotes / "$#"-in-double-quotes so it survives transport.
 SCAN='
 LIMIT=${RH_LIMIT:-40}
 set --
 if [ -n "${RH_ROOTS:-}" ]; then
+  old_IFS=$IFS
+  IFS="
+"
   for d in $RH_ROOTS; do [ -d "$d" ] && set -- "$@" "$d"; done
+  IFS=$old_IFS
 else
   for d in "$HOME" "$HOME/projects" "$HOME/Projects" "$HOME/code" "$HOME/src" \
            "$HOME/workspace" "$HOME/dev" "$HOME/repos" "$HOME/git" \
@@ -33,17 +47,40 @@ else
   done
 fi
 [ $# -eq 0 ] && set -- "$HOME"
-tmp=${TMPDIR:-/tmp}/.rh_all.$$
-{
-  for r in "$@"; do
-    find "$r" -maxdepth 3 \
-      \( -name node_modules -o -name .cache -o -name .venv -o -name vendor -o -name Library \) -prune -o \
-      -type d -name .git -print 2>/dev/null
-  done | while IFS= read -r g; do printf "%s\n" "${g%/.git}"; done
-  for r in "$@"; do
-    [ "$r" = "$HOME" ] && continue
-    find "$r" -mindepth 1 -maxdepth 1 -type d 2>/dev/null
+tmp=$(mktemp "${TMPDIR:-/tmp}/rh-projects.XXXXXX") || exit 1
+trap "rm -f \"$tmp\"" EXIT HUP INT TERM
+skip_dir() {
+  b=${1##*/}
+  case "$b" in node_modules|.cache|.venv|vendor|Library) return 0;; *) return 1;; esac
+}
+emit_if_project() { [ -d "$1/.git" ] && printf "%s\n" "$1"; }
+scan_projects() {
+  r=$1
+  emit_if_project "$r"
+  for a in "$r"/* "$r"/.[!.]*; do
+    [ -d "$a" ] || continue
+    skip_dir "$a" && continue
+    emit_if_project "$a"
+    for b in "$a"/* "$a"/.[!.]*; do
+      [ -d "$b" ] || continue
+      skip_dir "$b" && continue
+      emit_if_project "$b"
+      for c in "$b"/* "$b"/.[!.]*; do
+        [ -d "$c" ] || continue
+        skip_dir "$c" && continue
+        emit_if_project "$c"
+      done
+    done
   done
+}
+scan_children() {
+  r=$1
+  [ "$r" = "$HOME" ] && return 0
+  for a in "$r"/* "$r"/.[!.]*; do [ -d "$a" ] && printf "%s\n" "$a"; done
+}
+{
+  for r in "$@"; do scan_projects "$r"; done
+  for r in "$@"; do scan_children "$r"; done
 } | sort -u | grep -v "^$" > "$tmp"
 total=$(wc -l < "$tmp" | tr -d " ")
 n=0
@@ -60,13 +97,14 @@ done < "$tmp"
 printf "TOTAL=%s\n" "$total"
 if [ "$total" -gt "$LIMIT" ]; then printf "SHOWN=%s (truncated; pass --root)\n" "$LIMIT"; else printf "SHOWN=%s\n" "$total"; fi
 rm -f "$tmp" 2>/dev/null || true
+trap - EXIT HUP INT TERM
 '
 
 if [ -n "$VIA" ]; then
   # $VIA is unquoted so a raw connect string ("-p 2222 user@host") word-splits into ssh args;
   # a bare alias is just one word. (Same convention as the setup scripts.)
   printf '%s' "$SCAN" | ssh -o BatchMode=yes -o ConnectTimeout=10 $VIA \
-    "RH_LIMIT=$LIMIT RH_ROOTS='$roots_args' sh -s"
+    "RH_LIMIT=$(sq "$LIMIT") RH_ROOTS=$(sq "$roots_args") sh -s"
 else
   printf '%s' "$SCAN" | RH_LIMIT="$LIMIT" RH_ROOTS="$roots_args" sh -s
 fi

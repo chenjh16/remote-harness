@@ -17,8 +17,9 @@ Agent（即你）运行在用户的**本地机器**上；项目位于本机可�
 "$RH/scripts/server-guesses.sh"   # candidate `ssh <target>` lines (config aliases / known_hosts / history)
 ```
 **AskUserQuestion**："你的项目托管在哪台服务器上（如何 ssh 连接）？"
-- 列出每个候选项（如 `ssh myserver`、`ssh dev@10.0.0.5`）+ 其他（自由输入，如 `ssh -p 2222 dev@server.example.com`）。
+- Claude/聊天可以直接展示有用候选。Codex 结构化输入只能放入最佳 2-3 个候选（如 `ssh myserver`、`ssh dev@10.0.0.5`）；客户端提供的"其他"/自由输入用于填写真实命令，例如 `ssh -p 2222 dev@server.example.com`。
 - 提取 `CONNECT` = 去掉开头 `ssh` 的参数（如 `myserver` 或 `-p 2222 dev@host`）。
+- 支持的原始 `CONNECT` 形式包括主机/别名、可选的 `user@host`、`-p`/`-l`/`-i`，以及不需要 shell 引号的 `-J` / `-o ProxyJump=...`。若需要复杂 SSH 行为（`ProxyCommand`、`-F`、带空格的引号路径、本地转发等），请让用户先写进 `~/.ssh/config` 的 `Host` 别名，然后提供该别名。
 
 ## F-2 — 选择服务器上的项目目录
 
@@ -26,7 +27,7 @@ Agent（即你）运行在用户的**本地机器**上；项目位于本机可�
 "$RH/scripts/preflight.sh" --direction forward --server '<CONNECT>'   # re-run now that we know the server
 ```
 - `SERVER_REACHABLE=0` → 协助修复 ssh/密钥问题（用户可能只是被要求输入密码——提醒会话将非交互式），然后重新运行。不要结束本轮对话。
-- `---PROJECTS---` 列表提供候选目录。**AskUserQuestion**："服务器上的项目目录是哪个？"——列出每个 `PROJECT` 路径 + 其他（自由输入的绝对路径）→ `REMOTE_PROJECT_DIR`。
+- `---PROJECTS---` 列表提供候选目录。**AskUserQuestion**："服务器上的项目目录是哪个？"——Codex 结构化输入只放最佳 2-3 个 `PROJECT` 路径并保留"其他"/自由输入；Claude/聊天可以展示更长列表。自动推荐只是便利功能：若扫描结果很少或失败，就通过"其他"让用户手动输入绝对路径。→ `REMOTE_PROJECT_DIR`。
 
 ## F-2.5 — 确认本地挂载点（必须）
 
@@ -43,11 +44,12 @@ Agent（即你）运行在用户的**本地机器**上；项目位于本机可�
 
 ```
 "$HOME/.remote-harness/scripts/local-setup.sh" \
-  --via '<CONNECT>' --remote-path '<REMOTE_PROJECT_DIR>' \
-  [--mountpoint '<LOCAL_MP>'] --launch <LAUNCH> [--yolo]
+  --via <CONNECT_Q> --remote-path <REMOTE_PROJECT_DIR_Q> \
+  [--mountpoint <LOCAL_MP_Q>] --launch <LAUNCH> [--yolo]
 ```
 - `<LAUNCH>` = 当前 Agent 的 CLI 名称（claude/codex/opencode）。
 - `[--yolo]` 仅在用户要求跳过审批时添加。
+- 每个 `<..._Q>` 占位符都必须使用 `sq()` 语义作为 shell 单词引用。例如：`/srv/O'Neil/app` 应生成 `'/srv/O'\''Neil/app'`。这适用于 `--via`、`--remote-path` 和 `--mountpoint`。
 
 告知用户：
 

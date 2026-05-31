@@ -63,13 +63,16 @@ this box:  ssh <BOX_ALIAS>          → 127.0.0.1:<PORT> → (tunnel) → laptop
 ```
 
 **向用户提问**："你在笔记本上怎么 ssh 进这台服务器？"
-- 将每个候选项作为选项列出（例如 `ssh you@203.0.113.10`）
-- 加上"其他"（自由输入实际使用的命令，例如 `ssh -p 2222 you@203.0.113.20`）
+- Claude/聊天可以直接展示有用候选。Codex 结构化输入只能放入最佳 2-3 个候选（例如
+  `ssh you@203.0.113.10`）；客户端提供的"其他"/自由输入用于填写真实命令。
+- "其他"/自由输入示例：`ssh -p 2222 you@203.0.113.20`，或一个普通 SSH config 别名。
 
 从用户回答中提取：
 - `CONNECT` = ssh 的*参数部分*（若带有前导 `ssh` 则去掉），
   例如 `-p 2222 you@203.0.113.20`
 - `HOST` = 主机/别名部分，例如 `203.0.113.20` 或 `my-box`
+- 支持的原始 `CONNECT` 形式包括主机/别名、可选的 `user@host`、`-p`/`-l`/`-i`，以及不需要
+  shell 引号的 `-J` / `-o ProxyJump=...`。若需要复杂 SSH 行为（`ProxyCommand`、`-F`、带空格的引号路径、本地转发等），请让用户先写进 `~/.ssh/config` 的 `Host` 别名，然后提供该别名。
 
 ### 1b.5 确认两个目录（必须 — 询问用户，不得假设）
 
@@ -81,27 +84,35 @@ this box:  ssh <BOX_ALIAS>          → 127.0.0.1:<PORT> → (tunnel) → laptop
    - 其他（用户指定的另一个空目录） → 传入 `--remote-mountpoint '<that dir>'`。
 2. **笔记本项目目录** — 要开发的代码库：
    - 若隧道已建立（`PREFLIGHT=ok`）：执行 `"$RH/scripts/list-projects.sh" --via
-     <TUNNEL_ALIAS>`，然后提问用户"你笔记本上要开发哪个项目？"（每个路径作为选项，加"其他"自由输入）。→ 传入 `--project-dir '<LAPTOP_DIR>'`。
-   - 若隧道**尚未建立**（你刚在 Step 1 中搭建，还无法访问笔记本）：**省略** `--project-dir`，并告知用户该命令会在运行时提示输入笔记本项目目录（那个 readline 提示本身就是确认步骤）。
+     <TUNNEL_ALIAS>`，概述候选项，然后提问用户"你笔记本上要开发哪个项目？"。Codex 结构化输入只放最佳 2-3 个路径并保留"其他"/自由输入；Claude/聊天可以展示更长列表。→ 传入 `--project-dir '<LAPTOP_DIR>'`。
+   - 若隧道**尚未建立**（你刚在 Step 1 中搭建，还无法访问笔记本）：仍然要求用户手动输入笔记本项目路径。此时无法验证/列出路径，但这仍是必须确认项。→ 传入 `--project-dir '<LAPTOP_DIR>'`。
+
+`laptop-setup.sh` 会在笔记本上验证 `--project-dir`。如果路径不存在或不是目录，它会在合理时询问是否创建，并循环直到用户选择有效目录、成功创建目录或主动中止。若旧版代理省略 `--project-dir`，脚本仍保留笔记本侧交互提示作为兼容兜底；但本 skill 应该传入该参数。
 
 ### 1c. 输出笔记本命令 — 完成
 
 按以下格式**原样输出**（短行，`\` 续行，每行不超过 70 个字符）：
 
 ```
-d=$(mktemp -d "${TMPDIR:-/tmp}/rh.XXXXXX") \
-  && ssh <CONNECT> 'cat ~/.remote-harness/scripts/_common.sh'     >"$d/_common.sh" \
-  && ssh <CONNECT> 'cat ~/.remote-harness/scripts/laptop-setup.sh' >"$d/laptop-setup.sh" \
-  && bash "$d/laptop-setup.sh" --host <HOST> --port <PORT> --via '<CONNECT>' \
-       --box-alias <ALIAS> --launch <LAUNCH> \
-       [--remote-mountpoint '<BOX_MP>'] [--project-dir '<LAPTOP_DIR>'] [--yolo]; rm -rf "$d"
+(
+  d=$(mktemp -d "${TMPDIR:-/tmp}/rh.XXXXXX") || exit
+  trap 'rm -rf "$d"' EXIT
+  ssh <CONNECT_ARGS> 'cat ~/.remote-harness/scripts/_common.sh' \
+    >"$d/_common.sh" &&
+  ssh <CONNECT_ARGS> 'cat ~/.remote-harness/scripts/laptop-setup.sh' \
+    >"$d/laptop-setup.sh" &&
+  bash "$d/laptop-setup.sh" --host <HOST_Q> --port <PORT> \
+    --via <CONNECT_Q> --box-alias <ALIAS_Q> --launch <LAUNCH> \
+    [--remote-mountpoint <BOX_MP_Q>] --project-dir <LAPTOP_DIR_Q> [--yolo]
+)
 ```
 （两次 fetch 写入同一个临时目录：`laptop-setup.sh` 从同级目录 source `_common.sh`。笔记本通常没有安装任何工具，因此两个文件必须一起 fetch。）
-（`mktemp` 避免使用可预测的全局可写路径 `/tmp/rh.sh`，并以 0600 权限创建文件。）
-- `[--remote-mountpoint '<BOX_MP>']` / `[--project-dir '<LAPTOP_DIR>']` = 仅在 **1b.5** 中决定包含时才加入（若选择 `~/work/<name>` 默认值，或笔记本目录留待本地提示时，则省略）。两者均须为用户确认的值，不得使用推测值。
+（`mktemp` 避免使用可预测的全局可写路径 `/tmp/rh.sh`；子 shell 的 `trap` 会清理临时目录且不掩盖 fetch/setup 的退出码。）
+- `[--remote-mountpoint '<BOX_MP>']` = 仅在 **1b.5** 中决定包含时才加入（选择 `~/work/<name>` 默认值时省略）。`--project-dir` 应始终传入。两者均须为用户确认的值，不得使用推测值。
+- 每个 `<..._Q>` 占位符都必须使用 `sq()` 语义作为 shell 单词引用，而不是手写简单引号。例如：
+  `/Users/O'Neil/app` 应生成 `'/Users/O'\''Neil/app'`。这适用于 `--via`、`--host`、`--box-alias`、`--remote-mountpoint` 和 `--project-dir`。
 - `[--yolo]` 仅在用户要求跳过审批时添加。
-- `<CONNECT>` = 不带前导 `ssh` 的 ssh 参数，例如 `-p 2222 you@203.0.113.20`。
-  传给初始 `ssh` 调用和 `--via` 的值必须完全一致。
+- `<CONNECT_ARGS>` = 不带前导 `ssh` 的受支持 ssh 参数，例如 `-p 2222 you@203.0.113.20`，用于两次 fetch。`<CONNECT_Q>` 是同一个值的 shell 引用形式，用于 `--via`。不要使用 `eval`；复杂带引号的 SSH 命令必须改用 Host 别名。
 - `<LAUNCH>` = 在远端启动的**纯**编程代理 CLI — **即当前运行你（助手）的 CLI**：`claude`（Claude Code）、`codex`（Codex）、`opencode`（opencode）。
   （默认为 `claude`；用你当前正在运行的那个 CLI。）远端服务器必须已安装该 CLI。
   laptop-setup 通过**登录 shell**（`exec "${SHELL:-/bin/bash}" -lic ...`）启动它，因此位于 `~/.local/bin`（由 `~/.profile`/`~/.zshrc` 加入 PATH）的 CLI 无需完整路径即可找到。
@@ -115,7 +126,7 @@ d=$(mktemp -d "${TMPDIR:-/tmp}/rh.XXXXXX") \
 > 请在**笔记本上**运行此命令（在本地终端中，不是当前会话）。它将：
 > 1. 在你的 ssh 配置中添加 RemoteForward 行（如有需要，创建 `<BOX_USER>-remote` 别名）
 > 2. 自动重新连接以激活隧道
-> 3. 提示你输入要开发的项目目录（默认为当前目录；按 Enter 接受）
+> 3. 在笔记本上验证已确认的项目目录；若需要修正，会再次提示
 > 4. 将其挂载到远端服务器上
 > 5. 在远端启动代理 — 你的终端即变为该会话
 >    （代理会被告知代码是一个挂载目录，构建/测试/linter 应在你的笔记本上运行）

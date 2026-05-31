@@ -12,6 +12,18 @@ set -uo pipefail
 
 emit() { printf '%s=%s\n' "$1" "$2"; }
 note() { printf '%s\n' "$*" >&2; }
+need_arg() {
+  if [ -z "${2+x}" ] || [ -z "$2" ]; then
+    note "missing value for $1"
+    exit 2
+  fi
+}
+safe_ssh_token() {
+  case "${1:-}" in
+    ""|-*|*[[:space:]]*) return 1;;
+    *) return 0;;
+  esac
+}
 
 sshfs_install_hint(){   # the right install command for THIS box's OS / package manager
   case "$(uname -s 2>/dev/null)" in
@@ -28,15 +40,16 @@ sshfs_install_hint(){   # the right install command for THIS box's OS / package 
 ALIAS="" RPATH="" MP="" UNMOUNT=0 FORCE=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --alias)       ALIAS="$2"; shift 2;;
-    --remote-path) RPATH="$2"; shift 2;;
-    --mountpoint)  MP="$2"; shift 2;;
+    --alias)       need_arg "$1" "${2-}"; ALIAS="$2"; shift 2;;
+    --remote-path) need_arg "$1" "${2-}"; RPATH="$2"; shift 2;;
+    --mountpoint)  need_arg "$1" "${2-}"; MP="$2"; shift 2;;
     --unmount)     UNMOUNT=1; shift;;
     --force)       FORCE=1; shift;;
     *) shift;;
   esac
 done
 [ -n "$ALIAS" ] || { note "usage: mount-project.sh --alias NAME --remote-path /path [--mountpoint DIR] [--force]"; note "       mount-project.sh --alias NAME --unmount [--mountpoint DIR]"; exit 2; }
+safe_ssh_token "$ALIAS" || { note "unsafe ssh alias: $ALIAS"; exit 2; }
 
 # Default mountpoint = current directory (the Claude Code project dir).
 [ -n "$MP" ] || MP="$PWD"
@@ -109,7 +122,7 @@ if [ "$FORCE" != 1 ] && [ -n "$(ls -A "$MP" 2>/dev/null)" ]; then
   exit 4
 fi
 
-err="$(mktemp)"
+err="$(mktemp "${TMPDIR:-/tmp}/rh-mount.XXXXXX")"
 # reconnect + keepalives so brief tunnel hiccups self-heal. idmap=user (libfuse sshfs) maps the
 # remote uid → ours; omitted on macOS, where FUSE-T's sshfs mounts via NFS and doesn't accept it.
 # We deliberately KEEP sshfs's default attribute/dir caching (no cache_timeout=0): disabling it

@@ -72,13 +72,19 @@ empty, re-run with `--gen-key`.
 ```
 
 **AskUserQuestion**: "How do you ssh into this box from your laptop?"
-- Offer each guess as an option (e.g. `ssh you@203.0.113.10`)
-- Plus Other (free-text for their real command, e.g. `ssh -p 2222 you@203.0.113.20`)
+- Claude/chat may show the useful guesses directly. Codex structured input must offer only the best
+  2-3 guesses (e.g. `ssh you@203.0.113.10`); the client-provided Other/free-form answer remains the
+  place for their real command.
+- Other/free-text examples: `ssh -p 2222 you@203.0.113.20`, or a plain SSH config alias.
 
 From their answer extract:
 - `CONNECT` = the ssh *arguments only* (strip the leading `ssh` word if present),
   e.g. `-p 2222 you@203.0.113.20`
 - `HOST` = the host/alias token, e.g. `203.0.113.20` or `my-box`
+- Supported raw `CONNECT` forms are a host/alias, optional `user@host`, `-p`/`-l`/`-i`, and `-J` /
+  `-o ProxyJump=...` with tokens that do not need shell quoting. For complex SSH behavior
+  (`ProxyCommand`, `-F`, quoted paths with spaces, local forwards, etc.), tell the user to put that
+  in `~/.ssh/config` as a `Host` alias and provide the alias.
 
 ### 1b.5 Confirm BOTH directories (required — ask, don't assume)
 
@@ -92,33 +98,49 @@ Before emitting, confirm with the user (AskUserQuestion; detected values are def
    - Other (a different EMPTY box dir) → pass `--remote-mountpoint '<that dir>'`.
 2. **Laptop project dir** — which codebase to develop:
    - If the tunnel is already up (`PREFLIGHT=ok`): run `"$RH/scripts/list-projects.sh" --via
-     <TUNNEL_ALIAS>`, then AskUserQuestion "Which project on your laptop?" (each path + Other
-     free-text). → pass `--project-dir '<LAPTOP_DIR>'`.
-   - If the tunnel is NOT up yet (you just built it in Step 1, can't reach the laptop): OMIT
-     `--project-dir` and tell the user the command will prompt them for the laptop project dir
-     (that readline prompt IS the confirmation).
+     <TUNNEL_ALIAS>`, summarize the candidates, then AskUserQuestion "Which project on your laptop?"
+     Codex structured input gets only the best 2-3 paths plus Other/free-form; Claude/chat may show
+     a longer list. → pass `--project-dir '<LAPTOP_DIR>'`.
+   - If the tunnel is NOT up yet (you just built it in Step 1, can't reach the laptop): still ask the
+     user to type the laptop project path explicitly. You cannot validate/list it yet, but it is the
+     required confirmation. → pass `--project-dir '<LAPTOP_DIR>'`.
+
+`laptop-setup.sh` validates `--project-dir` on the laptop. If the path is missing or not a
+directory, it asks whether to create it when reasonable, then loops until the user picks a valid
+directory, creates one, or aborts. If an older agent omits `--project-dir`, the script still falls
+back to its on-laptop prompt for backward compatibility; this skill should pass it.
 
 ### 1c. Emit the laptop command — then you are done
 
 Print the following **exactly as shown** (short lines, `\`-continued, ≲70 chars each):
 
 ```
-d=$(mktemp -d "${TMPDIR:-/tmp}/rh.XXXXXX") \
-  && ssh <CONNECT> 'cat ~/.remote-harness/scripts/_common.sh'     >"$d/_common.sh" \
-  && ssh <CONNECT> 'cat ~/.remote-harness/scripts/laptop-setup.sh' >"$d/laptop-setup.sh" \
-  && bash "$d/laptop-setup.sh" --host <HOST> --port <PORT> --via '<CONNECT>' \
-       --box-alias <ALIAS> --launch <LAUNCH> \
-       [--remote-mountpoint '<BOX_MP>'] [--project-dir '<LAPTOP_DIR>'] [--yolo]; rm -rf "$d"
+(
+  d=$(mktemp -d "${TMPDIR:-/tmp}/rh.XXXXXX") || exit
+  trap 'rm -rf "$d"' EXIT
+  ssh <CONNECT_ARGS> 'cat ~/.remote-harness/scripts/_common.sh' \
+    >"$d/_common.sh" &&
+  ssh <CONNECT_ARGS> 'cat ~/.remote-harness/scripts/laptop-setup.sh' \
+    >"$d/laptop-setup.sh" &&
+  bash "$d/laptop-setup.sh" --host <HOST_Q> --port <PORT> \
+    --via <CONNECT_Q> --box-alias <ALIAS_Q> --launch <LAUNCH> \
+    [--remote-mountpoint <BOX_MP_Q>] --project-dir <LAPTOP_DIR_Q> [--yolo]
+)
 ```
 (Two fetches into one temp dir: `laptop-setup.sh` sources `_common.sh` from beside it. The laptop
 usually has no install, so both files must be fetched together.)
-(`mktemp` avoids a predictable, world-writable `/tmp/rh.sh` and creates the file 0600.)
-- `[--remote-mountpoint '<BOX_MP>']` / `[--project-dir '<LAPTOP_DIR>']` = include each ONLY as
-  decided in **1b.5** (omit when you chose the `~/work/<name>` default, or when the laptop dir is
-  left to the on-laptop prompt). Both must be the user-confirmed values, not guesses.
+(`mktemp` avoids a predictable, world-writable `/tmp/rh.sh`; the subshell `trap` removes the temp dir
+without masking the fetch/setup exit code.)
+- `[--remote-mountpoint '<BOX_MP>']` = include only when **1b.5** chose an explicit box mountpoint
+  (omit it for the `~/work/<name>` default). `--project-dir` should always be included. Both values
+  must be user-confirmed, not guesses.
+- Every `<..._Q>` placeholder is a shell word quoted with `sq()` semantics, not ad-hoc quotes. Example:
+  `/Users/O'Neil/app` becomes `'/Users/O'\''Neil/app'`. Apply this to `--via`, `--host`,
+  `--box-alias`, `--remote-mountpoint`, and `--project-dir`.
 - `[--yolo]` only if the user asked to bypass approvals.
-- `<CONNECT>` = ssh args without the leading `ssh` word, e.g. `-p 2222 you@203.0.113.20`.
-  Pass exactly the same value to both the initial `ssh` call and `--via`.
+- `<CONNECT_ARGS>` = supported ssh args without the leading `ssh` word, e.g.
+  `-p 2222 you@203.0.113.20`, used by the two fetches. `<CONNECT_Q>` is the same value shell-quoted
+  for `--via`. Do not `eval`; for complex quoted SSH commands, require a Host alias.
 - `<LAUNCH>` = the **bare** coding-agent CLI to start on the remote — **the CLI of the agent you
   (the assistant) are running in**: `claude` (Claude Code), `codex` (Codex), `opencode` (opencode).
   (Default `claude`; use the CLI you are running in.) The remote box must have it installed.
@@ -134,7 +156,7 @@ Tell the user:
 > Run this **on your laptop** (in a local terminal, not this session). It will:
 > 1. Add the RemoteForward line to your ssh config (creating a `<BOX_USER>-remote` alias if needed)
 > 2. Reconnect automatically to activate the tunnel
-> 3. Prompt you for the project dir to develop (defaults to the current dir; press Enter to accept)
+> 3. Validate the confirmed project dir on the laptop and prompt again if it needs correction
 > 4. Mount it on the remote box
 > 5. Launch the agent on the remote — your terminal becomes the session
 >    (the agent is told the code is a mount and to run builds/tests/linters back on your laptop)

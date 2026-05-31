@@ -10,11 +10,13 @@
 #
 # Usage (emitted by the skill — paste as-is). This script sources _common.sh from beside it, so the
 # command fetches BOTH files into one temp dir (the laptop usually has no install):
-#   d=$(mktemp -d "${TMPDIR:-/tmp}/rh.XXXXXX") \
-#     && ssh <CONNECT> 'cat ~/.remote-harness/scripts/_common.sh'      >"$d/_common.sh" \
-#     && ssh <CONNECT> 'cat ~/.remote-harness/scripts/laptop-setup.sh' >"$d/laptop-setup.sh" \
-#     && bash "$d/laptop-setup.sh" --host <HOST> --port <PORT> --via '<CONNECT>' --box-alias <ALIAS>
-#     ; rm -rf "$d"
+#   (
+#     d=$(mktemp -d "${TMPDIR:-/tmp}/rh.XXXXXX") || exit
+#     trap 'rm -rf "$d"' EXIT
+#     ssh <CONNECT> 'cat ~/.remote-harness/scripts/_common.sh'      >"$d/_common.sh" &&
+#     ssh <CONNECT> 'cat ~/.remote-harness/scripts/laptop-setup.sh' >"$d/laptop-setup.sh" &&
+#     bash "$d/laptop-setup.sh" --host <HOST> --port <PORT> --via '<CONNECT>' --box-alias <ALIAS>
+#   )
 #
 # Flags:
 #   --host <alias|ip>     ssh Host block to write/update (required)
@@ -25,7 +27,7 @@
 #   --box-user <user>     remote box username (for mount path and alias naming)
 #   --remote-mountpoint <d>  exact box dir to mount the project at (must be empty;
 #                            default: <remote $HOME>/work/<project-name>)
-#   --project-dir <d>     laptop project dir to mount (skips Phase 3's interactive prompt)
+#   --project-dir <d>     laptop project dir to mount (validated; prompts again if invalid)
 #   --launch <cmd>        coding-agent CLI to start on the remote (default: claude;
 #                         Codex passes 'codex', opencode passes 'opencode')
 #   --yolo                bypass approvals on the launched agent — claude/codex get their
@@ -34,22 +36,29 @@
 #   --yes                 non-interactive (skip all confirm prompts)
 set -uo pipefail
 
+need_arg() {
+  if [ -z "${2+x}" ] || [ -z "$2" ]; then
+    printf 'missing value for %s\n' "$1" >&2
+    exit 2
+  fi
+}
+
 # ---- argument parsing -----------------------------------------------------
 HOST="" PORT="" PUBKEY="" VIA="" BOX_ALIAS="" ASSUME_YES=0 SETUP_ONLY=0
 BOX_USER="" REMOTE_MP="" LAUNCH="claude" PROJ_DIR_ARG=""
 YOLO=0; EFF_LAUNCH=""; LAUNCH_BASE="claude"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --host)          HOST="$2";           shift 2;;
-    --port)          PORT="$2";           shift 2;;
-    --pubkey)        PUBKEY="$2";         shift 2;;
-    --via)           VIA="$2";            shift 2;;
-    --launch)        LAUNCH="$2";         shift 2;;   # CLI to start on the remote (claude/codex/opencode)
+    --host)          need_arg "$1" "${2-}"; HOST="$2";           shift 2;;
+    --port)          need_arg "$1" "${2-}"; PORT="$2";           shift 2;;
+    --pubkey)        need_arg "$1" "${2-}"; PUBKEY="$2";         shift 2;;
+    --via)           need_arg "$1" "${2-}"; VIA="$2";            shift 2;;
+    --launch)        need_arg "$1" "${2-}"; LAUNCH="$2";         shift 2;;   # CLI to start on the remote (claude/codex/opencode)
     --yolo)          YOLO=1;              shift;;     # bypass approvals on the launched agent
-    --box-alias)     BOX_ALIAS="$2";      shift 2;;
-    --box-user)      BOX_USER="$2";       shift 2;;
-    --remote-mountpoint) REMOTE_MP="$2";  shift 2;;   # exact box dir to mount at (e.g. your invoking cwd)
-    --project-dir)   PROJ_DIR_ARG="$2";   shift 2;;   # laptop project dir (skip the interactive prompt)
+    --box-alias)     need_arg "$1" "${2-}"; BOX_ALIAS="$2";      shift 2;;
+    --box-user)      need_arg "$1" "${2-}"; BOX_USER="$2";       shift 2;;
+    --remote-mountpoint) need_arg "$1" "${2-}"; REMOTE_MP="$2";  shift 2;;   # exact box dir to mount at (e.g. your invoking cwd)
+    --project-dir)   need_arg "$1" "${2-}"; PROJ_DIR_ARG="$2";   shift 2;;   # laptop project dir (skip the interactive prompt)
     --setup-only)    SETUP_ONLY=1;        shift;;
     --yes|-y)        ASSUME_YES=1;        shift;;
     *) printf 'unknown arg: %s\n' "$1" >&2; exit 2;;
@@ -57,12 +66,15 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$PORT" ] || { printf 'need --port\n' >&2; exit 2; }
 printf '%s' "$PORT" | grep -qE '^[0-9]+$' || { printf 'port must be numeric: %s\n' "$PORT" >&2; exit 2; }
+[ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || { printf 'port out of range: %s\n' "$PORT" >&2; exit 2; }
 
 # ---- shared helpers (colors, say/ok/warn/err/hdr/ask, sq, OS vars, parse_via, ssh-config) -------
 # laptop-setup.sh is fetched to the laptop and run STANDALONE (the laptop usually has no install),
 # so the skill's one-command fetches _common.sh next to this file and we source it by path.
 RH_COMMON="${RH_COMMON:-$(dirname "$0")/_common.sh}"
-if [ -f "$RH_COMMON" ]; then . "$RH_COMMON"
+if [ -f "$RH_COMMON" ]; then
+  # shellcheck source=./_common.sh
+  . "$RH_COMMON"
 else printf 'error: missing _common.sh next to %s — re-copy the full command\n' "$0" >&2; exit 2; fi
 
 # ---- auto-cleanup on exit/disconnect ---------------------------------------
@@ -90,12 +102,12 @@ cleanup() {
 printf "\n${_B}remote-harness${_0} laptop setup  ${_C}port=%s${_0}  platform=%s\n\n" "$PORT" "$PLAT"
 
 # Resolve YOLO into the effective launch command per agent.
-EFF_LAUNCH="$LAUNCH"
-LAUNCH_BASE="$(set -- $LAUNCH; echo "${1:-claude}")"   # bare CLI name (claude|codex|opencode)
-case "$LAUNCH_BASE" in
+case "$LAUNCH" in
   claude|codex|opencode) ;;
   *) printf 'unsupported --launch %s (expected claude|codex|opencode)\n' "$LAUNCH" >&2; exit 2;;
 esac
+EFF_LAUNCH="$LAUNCH"
+LAUNCH_BASE="$LAUNCH"
 if [ "$YOLO" = 1 ]; then
   case "$LAUNCH_BASE" in
     claude)   EFF_LAUNCH="$LAUNCH --dangerously-skip-permissions";              warn "YOLO: claude --dangerously-skip-permissions";;
@@ -111,8 +123,17 @@ fi
 
 # -- parse --via into V_HOST/V_PORT/V_USER/V_IDENTITY (parse_via from _common.sh) --
 parse_via "$VIA"
+[ -z "${V_UNSUPPORTED_SSH_OPTIONS:-}" ] || {
+  printf 'unsupported ssh option(s) in --via:%s\n' "$V_UNSUPPORTED_SSH_OPTIONS" >&2
+  printf 'Put complex ssh options in ~/.ssh/config as a Host alias, then pass that alias.\n' >&2
+  exit 2
+}
 [ -z "$V_HOST" ] && [ -n "$HOST" ] && V_HOST="$HOST"
 [ -z "$BOX_USER" ] && BOX_USER="$V_USER"
+[ -z "$V_HOST" ] || safe_ssh_token "$V_HOST" || { printf 'unsafe ssh host in --via: %s\n' "$V_HOST" >&2; exit 2; }
+[ -z "$HOST" ] || safe_ssh_token "$HOST" || { printf 'unsafe --host: %s\n' "$HOST" >&2; exit 2; }
+[ -z "$BOX_ALIAS" ] || safe_ssh_token "$BOX_ALIAS" || { printf 'unsafe --box-alias: %s\n' "$BOX_ALIAS" >&2; exit 2; }
+[ -z "$BOX_USER" ] || safe_ssh_token "$BOX_USER" || { printf 'unsafe --box-user: %s\n' "$BOX_USER" >&2; exit 2; }
 
 # -- obtain the box's public key --
 if [ -z "$PUBKEY" ]; then
@@ -140,12 +161,17 @@ else
         || warn "enable in System Settings > General > Sharing > Remote Login"; }
   else
     if ! command -v sshd >/dev/null 2>&1 && [ ! -x /usr/sbin/sshd ]; then
-      for pm in "apt-get:-y openssh-server" "dnf:-y openssh-server" "pacman:--noconfirm openssh" "apk: openssh"; do
-        cmd="${pm%%:*}"; args="${pm#*:}"
-        if command -v "$cmd" >/dev/null 2>&1; then
-          ask "  sshd not found. Install via $cmd?" && eval "sudo $cmd install $args" && break
-        fi
-      done
+      if command -v apt-get >/dev/null 2>&1; then
+        ask "  sshd not found. Install via apt-get?" && sudo apt-get install -y openssh-server
+      elif command -v dnf >/dev/null 2>&1; then
+        ask "  sshd not found. Install via dnf?" && sudo dnf install -y openssh-server
+      elif command -v pacman >/dev/null 2>&1; then
+        ask "  sshd not found. Install via pacman?" && sudo pacman -S --noconfirm openssh
+      elif command -v apk >/dev/null 2>&1; then
+        ask "  sshd not found. Install via apk?" && sudo apk add openssh
+      else
+        warn "sshd not found and no supported package manager was detected; install OpenSSH server manually."
+      fi
     fi
     if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
       ask "  Enable & start ssh (sudo systemctl enable --now ssh)?" && \
@@ -177,11 +203,11 @@ CFG="$HOME/.ssh/config"; touch "$CFG"; chmod 600 "$CFG" 2>/dev/null || true
 TARGET=""; REUSE=0   # block_exists / remove_host_block / write_managed_alias come from _common.sh
 
 # The --via connection is the GROUND TRUTH for how to reach the box. If it carries an explicit
-# user or port (a raw connection like `-p 2222 user@ip`), reach the box through a DEDICATED managed
-# alias built from those exact params — NEVER by writing RemoteForward into a coincidental/stale
-# `Host <ip>` block, which may resolve to the wrong user/port (e.g. defaulting to the laptop's own
-# username, leaving the tunnel asking for a password). Only reuse --host when --via IS just that alias.
-RAW_CONN=0; { [ -n "$V_PORT" ] || [ -n "$V_USER" ]; } && RAW_CONN=1
+# user, port, identity, or jump host (a raw connection like `-J jump -p 2222 user@ip`), reach the box
+# through a DEDICATED managed alias built from those exact params — NEVER by writing RemoteForward
+# into a coincidental/stale `Host <ip>` block, which may resolve to the wrong user/port/key/path.
+# Only reuse --host when --via IS just that alias.
+RAW_CONN=0; { [ -n "$V_PORT" ] || [ -n "$V_USER" ] || [ -n "$V_IDENTITY" ] || [ -n "$V_PROXYJUMP" ]; } && RAW_CONN=1
 if [ "$RAW_CONN" = 0 ] && [ -n "$HOST" ] && block_exists "$HOST"; then
   TARGET="$HOST"; REUSE=1
 else
@@ -213,10 +239,14 @@ else
   # Create-or-replace a managed alias carrying the exact --via identity + RemoteForward (idempotent).
   # Keepalives so a half-open tunnel (NAT idle / laptop sleep) is detected; ExitOnForwardFailure so a
   # port-collision fails loudly instead of leaving a live-but-no-forward connection that polls as "up".
-  write_managed_alias "$TARGET" "$RF_LINE" \
-    "    ServerAliveInterval 30" "    ServerAliveCountMax 3" \
-    "    ExitOnForwardFailure yes" "    TCPKeepAlive yes"
-  ok "ssh config: wrote managed 'Host $TARGET' (HostName ${V_HOST:-?}, port ${V_PORT:-22}, user ${V_USER:-<login default>}) + RemoteForward"
+  if write_managed_alias "$TARGET" "$RF_LINE" \
+      "    ServerAliveInterval 30" "    ServerAliveCountMax 3" \
+      "    ExitOnForwardFailure yes" "    TCPKeepAlive yes"; then
+    ok "ssh config: wrote managed 'Host $TARGET' (HostName ${V_HOST:-?}, port ${V_PORT:-22}, user ${V_USER:-<login default>}) + RemoteForward"
+  else
+    err "ssh config: could not write managed Host '$TARGET'"
+    exit 2
+  fi
   say "    Reconnect to the box via: ${_B}ssh $TARGET${_0}"
 fi
 chmod 600 "$CFG" 2>/dev/null || true
@@ -251,7 +281,7 @@ trap cleanup EXIT INT TERM HUP   # auto-unmount + drop the tunnel when this scri
 
 # Poll until the remote port is listening (up to 20s)
 READY=0
-for i in $(seq 1 10); do
+for _ in $(seq 1 10); do
   sleep 2
   # Portable listener check on the box (ss -> netstat -an [GNU/BSD] -> lsof), matching detect.sh /
   # check-tunnel.sh; extracts the port from host:PORT or BSD host.PORT and matches exactly.
@@ -304,21 +334,52 @@ pick_dir() {
   printf '%s' "$result"
 }
 
+choose_project_dir() {
+  local candidate="${1:-}" from_arg="${2:-0}" newdir=""
+  [ -n "$candidate" ] || candidate="$(pick_dir)"
+  while :; do
+    candidate="${candidate/#\~/$HOME}"
+    candidate="${candidate%/}"
+    if [ -d "$candidate" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+    if [ "$from_arg" = 1 ]; then
+      warn "Project dir from skill is not a directory: $candidate" >&2
+      from_arg=0
+    else
+      warn "Project dir is not a directory: $candidate" >&2
+    fi
+    if [ ! -e "$candidate" ]; then
+      if ask "  Create it?"; then
+        if mkdir -p "$candidate" 2>/dev/null && [ -d "$candidate" ]; then
+          ok "Created $candidate" >&2
+          printf '%s' "$candidate"
+          return 0
+        fi
+        warn "Could not create $candidate" >&2
+      fi
+    else
+      warn "Path exists but is not a directory." >&2
+    fi
+    if [ "$ASSUME_YES" = 1 ] || [ ! -e /dev/tty ]; then
+      err "No valid project directory selected."
+      exit 1
+    fi
+    printf '  Enter a laptop project dir (blank to abort): ' >/dev/tty
+    newdir=""
+    IFS= read -r newdir </dev/tty || true
+    [ -n "$newdir" ] || { err "Aborted."; exit 1; }
+    candidate="$newdir"
+  done
+}
+
 # Use the agent-confirmed dir if it passed one (--project-dir); otherwise prompt interactively.
 if [ -n "$PROJ_DIR_ARG" ]; then
-  PROJ_DIR="${PROJ_DIR_ARG/#\~/$HOME}"; ok "Project dir (from skill): ${_B}${PROJ_DIR}${_0}"
+  if ! PROJ_DIR="$(choose_project_dir "$PROJ_DIR_ARG" 1)"; then exit 1; fi
+  ok "Project dir (from skill): ${_B}${PROJ_DIR}${_0}"
 else
-  PROJ_DIR="$(pick_dir)"
-fi
-PROJ_DIR="${PROJ_DIR%/}"   # strip trailing slash
-
-if [ ! -d "$PROJ_DIR" ]; then
-  warn "'$PROJ_DIR' does not exist."
-  if ask "  Create it?"; then
-    mkdir -p "$PROJ_DIR" && ok "Created $PROJ_DIR"
-  else
-    err "Aborted."; exit 1
-  fi
+  if ! PROJ_DIR="$(choose_project_dir "" 0)"; then exit 1; fi
 fi
 ok "Selected: ${_B}${PROJ_DIR}${_0}"
 PROJ_NAME="$(basename "$PROJ_DIR")"

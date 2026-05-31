@@ -21,9 +21,14 @@ legitimate stops are an sshfs-install gate and the final hand-off. Helper-script
 "$RH/scripts/server-guesses.sh"   # candidate `ssh <target>` lines (config aliases / known_hosts / history)
 ```
 **AskUserQuestion**: "Which server hosts your project (how do you ssh to it)?"
-- Offer each guess (e.g. `ssh myserver`, `ssh dev@10.0.0.5`) + Other (free-text, e.g.
-  `ssh -p 2222 dev@server.example.com`).
+- Claude/chat may show the useful guesses directly. Codex structured input must offer only the best
+  2-3 guesses (e.g. `ssh myserver`, `ssh dev@10.0.0.5`); the client-provided Other/free-form answer
+  remains the place for the real command, e.g. `ssh -p 2222 dev@server.example.com`.
 - Extract `CONNECT` = ssh args without the leading `ssh` (e.g. `myserver`, or `-p 2222 dev@host`).
+- Supported raw `CONNECT` forms are a host/alias, optional `user@host`, `-p`/`-l`/`-i`, and `-J` /
+  `-o ProxyJump=...` with tokens that do not need shell quoting. For complex SSH behavior
+  (`ProxyCommand`, `-F`, quoted paths with spaces, local forwards, etc.), tell the user to put that
+  in `~/.ssh/config` as a `Host` alias and provide the alias.
 
 ## F-2 — Pick the project dir on the server
 
@@ -33,7 +38,9 @@ legitimate stops are an sshfs-install gate and the final hand-off. Helper-script
 - `SERVER_REACHABLE=0` → help fix ssh/keys (they may just be prompted for a password — warn the
   session won't be non-interactive), then re-run. Do NOT end the turn.
 - The `---PROJECTS---` list gives candidate dirs. **AskUserQuestion**: "Which project directory on
-  the server?" — offer each `PROJECT` path + Other (free-text absolute path) → `REMOTE_PROJECT_DIR`.
+  the server?" Codex structured input gets only the best 2-3 `PROJECT` paths plus Other/free-form;
+  Claude/chat may show a longer list. Auto recommendations are a convenience: if scanning is sparse
+  or fails, ask for a manual absolute path through Other. → `REMOTE_PROJECT_DIR`.
 
 ## F-2.5 — Confirm the local mountpoint (required)
 
@@ -53,11 +60,14 @@ Print **exactly** (short, `\`-continued lines):
 
 ```
 "$HOME/.remote-harness/scripts/local-setup.sh" \
-  --via '<CONNECT>' --remote-path '<REMOTE_PROJECT_DIR>' \
-  [--mountpoint '<LOCAL_MP>'] --launch <LAUNCH> [--yolo]
+  --via <CONNECT_Q> --remote-path <REMOTE_PROJECT_DIR_Q> \
+  [--mountpoint <LOCAL_MP_Q>] --launch <LAUNCH> [--yolo]
 ```
 - `<LAUNCH>` = the CLI of the agent you are running in (claude/codex/opencode).
 - `[--yolo]` only if the user asked to bypass approvals.
+- Every `<..._Q>` placeholder is a shell word quoted with `sq()` semantics. Example:
+  `/srv/O'Neil/app` becomes `'/srv/O'\''Neil/app'`. Apply this to `--via`, `--remote-path`, and
+  `--mountpoint`.
 
 Tell the user:
 

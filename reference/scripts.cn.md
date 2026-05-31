@@ -33,18 +33,18 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
   并在挂载目录内本地启动代理；退出时自动卸载。
   参数：`--via '<ssh-args|alias>' --remote-path '<dir>' [--mountpoint '<dir>'] --launch <cli> [--yolo]`。
 - `"$RH/scripts/laptop-setup.sh"` — **（反向）在笔记本电脑上运行**：第 1–5 阶段全自动化。
-  第 1 阶段：SSH 服务器、授权密钥、RemoteForward 配置。第 2 阶段：重新连接。第 3 阶段：选择项目目录
-  （`--project-dir` 可跳过提示）。第 4 阶段：在远端进行 sshfs 挂载（sshfs 缺失或目标非空时交互重试）。
+  第 1 阶段：SSH 服务器、授权密钥、RemoteForward 配置。第 2 阶段：重新连接。第 3 阶段：验证项目目录
+  （`--project-dir` 提供已确认默认值；无效路径会再次提示）。第 4 阶段：在远端进行 sshfs 挂载（sshfs 缺失或目标非空时交互重试）。
   第 5 阶段：注入「在笔记本上运行」规则，然后启动所选代理（`--launch`，默认为 `claude`）。
 - `"$RH/scripts/inject-rule.sh"` — **在代理运行的机器上执行**（反向为远端机器，正向为本地机器），方向无关：
   `on <agent> <code_path> <host_alias> <mountpoint> [yolo]` 在 `$RH_HOME/.sessions/<key>` 下构建
   **会话级**产物，并打印启动方式，确保**仅本次会话**读取该规则——**不修改任何全局配置，也不写入已挂载的仓库**。
   输出 `RH_STATUS`、`RH_LAUNCH_ENV`、`RH_LAUNCH_FLAGS`：
-    - claude   → `RH_LAUNCH_FLAGS=--append-system-prompt-file <rule>`（会话标志）
-    - opencode → `RH_LAUNCH_ENV=OPENCODE_CONFIG=<session cfg>`（含指令；若指定 yolo 则追加 `permission:"allow"`）
-    - codex    → `RH_LAUNCH_ENV=CODEX_HOME=<session home>`（真实 auth/config 通过符号链接引入；附带我们的 `AGENTS.md`；
+    - claude   → `RH_LAUNCH_FLAGS=--append-system-prompt-file '<rule>'`（会话标志）
+    - opencode → `RH_LAUNCH_ENV=OPENCODE_CONFIG='<session cfg>'`（含指令；若指定 yolo 则追加 `permission:"allow"`）
+    - codex    → `RH_LAUNCH_ENV=CODEX_HOME='<session home>'`（真实 auth/config 通过符号链接引入；附带我们的 `AGENTS.md`；
       非 yolo 时还会带 `RH_LAUNCH_FLAGS=-s workspace-write -c sandbox_workspace_write.network_access=true
-      -c sandbox_workspace_write.writable_roots=["~/.ssh"]`，使沙箱放行规则要求的出站 ssh，并允许 ssh 在
+      -c 'sandbox_workspace_write.writable_roots=["~/.ssh"]'`，使沙箱放行规则要求的出站 ssh，并允许 ssh 在
       `~/.ssh` 下写入 ControlMaster socket / known_hosts——必须带 `-s`，否则默认模式下该子表会被忽略。
       对于重度/长时间的 codex 会话，`/remote-harness yolo`（直接关掉沙箱）仍是最省心的。）
   规则内容：声明当前工作目录是 `<host_alias>` 上 `<code_path>` 的 sshfs 挂载，并要求通过
@@ -53,4 +53,5 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
   `RH_LAUNCH_ENV`/`RH_LAUNCH_FLAGS` 注入启动命令，并在退出时调用
   `off <agent> <mountpoint>`（删除会话目录）。
 - `"$RH/scripts/_common.sh"` — 被两个安装脚本共同 source 的共享工具函数（颜色、`ask`、`sq`、
-  `parse_via`、`write_managed_alias`、OS 变量）。非入口点。
+  `parse_via`、`write_managed_alias`、OS 变量）。当 setup 脚本写入托管 ssh 别名时，`parse_via`
+  会保留 user/port/identity 以及 `ProxyJump`（`-J` / `-o ProxyJump=...`）。它会有意拒绝无法安全保留的原始 SSH 语义（`ProxyCommand`、`-F`、本地转发、带空格的引号 token 等）；这类用法应先写进 `~/.ssh/config` 的 `Host` 别名，再传入该别名。非入口点。

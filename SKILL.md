@@ -55,6 +55,12 @@ unanswered decision.
 > the reply. opencode: ask in chat and wait. For chat fallbacks, batch tightly related decisions
 > (up to three) only when doing so reduces round-trips and the expected answer format is obvious.
 
+> **Codex structured-input limit:** Codex `request_user_input` supports only 2-3 explicit choices
+> per question, and the client supplies the free-form `Other` answer. When there are many SSH
+> guesses, project paths, or mountpoints, summarize the longer list in chat, then put only the best
+> 2-3 choices in the structured prompt. Always leave the `Other`/free-form path available for the
+> user's real SSH command, project directory, or mountpoint.
+
 The **only legitimate places to stop** are:
 - `sshfs` blocked: give the install cmd, AskUserQuestion ("installed? ✅/⚠️"), re-run on ✅.
 - After handing over the final command: the setup script takes over (self-contained + interactive on

@@ -21,6 +21,12 @@ SCRIPTS="$RH/scripts"; [ -x "$SCRIPTS/check-tunnel.sh" ] || SCRIPTS="$(cd "$(dir
 
 emit(){ printf '%s=%s\n' "$1" "$2"; }
 blocked(){ emit PREFLIGHT blocked; emit BLOCKED_STEP "$1"; emit ERROR "$2"; emit REMEDY "$3"; exit 0; }
+need_arg(){
+  if [ -z "${2+x}" ] || [ -z "$2" ]; then
+    printf 'missing value for %s\n' "$1" >&2
+    exit 2
+  fi
+}
 
 OS="$(uname -s 2>/dev/null || echo unknown)"
 sshfs_install_hint(){   # the right install command for THIS machine's OS / package manager
@@ -51,14 +57,15 @@ check_sshfs_fuse(){     # blocks on missing sshfs/FUSE; emits SSHFS/FUSE ok. Che
 PREF_ALIAS="" PROJECT_DIR="$PWD" NO_LIST=0 DIRECTION=reverse SERVER=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --alias)       PREF_ALIAS="$2"; shift 2;;
-    --project-dir) PROJECT_DIR="$2"; shift 2;;
+    --alias)       need_arg "$1" "${2-}"; PREF_ALIAS="$2"; shift 2;;
+    --project-dir) need_arg "$1" "${2-}"; PROJECT_DIR="$2"; shift 2;;
     --no-list)     NO_LIST=1; shift;;
-    --direction)   DIRECTION="$2"; shift 2;;   # reverse (default) | forward
-    --server)      SERVER="$2"; shift 2;;      # forward: ssh args/alias to the project server
+    --direction)   need_arg "$1" "${2-}"; DIRECTION="$2"; shift 2;;   # reverse (default) | forward
+    --server)      need_arg "$1" "${2-}"; SERVER="$2"; shift 2;;      # forward: ssh args/alias to the project server
     *) shift;;
   esac
 done
+case "$DIRECTION" in reverse|forward) ;; *) printf 'unsupported --direction %s\n' "$DIRECTION" >&2; exit 2;; esac
 
 emit PROJECT_DIR "$PROJECT_DIR"
 [ -n "${SSH_CONNECTION:-}" ] && emit ON_REMOTE 1 || emit ON_REMOTE 0

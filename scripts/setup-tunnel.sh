@@ -9,14 +9,23 @@ set -euo pipefail
 emit() { printf '%s=%s\n' "$1" "$2"; }
 note() { printf '%s\n' "$*" >&2; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 2; }
+need_arg() { [ -n "${2+x}" ] && [ -n "$2" ] || die "missing value for $1"; }
+ssh_config_value() {
+  case "$1" in
+    *[[:space:]\"\\]*)
+      printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+      ;;
+    *) printf '%s' "$1";;
+  esac
+}
 
 ALIAS="" PORT="" LUSER="" IDENTITY="" GEN_KEY=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --alias)    ALIAS="$2"; shift 2;;
-    --port)     PORT="$2"; shift 2;;
-    --user)     LUSER="$2"; shift 2;;
-    --identity) IDENTITY="$2"; shift 2;;
+    --alias)    need_arg "$1" "${2-}"; ALIAS="$2"; shift 2;;
+    --port)     need_arg "$1" "${2-}"; PORT="$2"; shift 2;;
+    --user)     need_arg "$1" "${2-}"; LUSER="$2"; shift 2;;
+    --identity) need_arg "$1" "${2-}"; IDENTITY="$2"; shift 2;;
     --gen-key)  GEN_KEY=1; shift;;
     *) die "unknown argument: $1";;
   esac
@@ -24,7 +33,11 @@ done
 [ -n "$ALIAS" ] && [ -n "$PORT" ] && [ -n "$LUSER" ] \
   || die "usage: setup-tunnel.sh --alias NAME --port PORT --user LAPTOP_USER [--identity KEYFILE] [--gen-key]"
 printf '%s' "$PORT" | grep -qE '^[0-9]+$' || die "port must be numeric: $PORT"
+[ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "port out of range: $PORT"
 printf '%s' "$ALIAS" | grep -qE '^[A-Za-z0-9._-]+$' || die "alias has unsafe characters: $ALIAS"
+case "$LUSER" in ""|-*|*[[:space:]]*) die "user has unsafe characters: $LUSER";; esac
+case "$IDENTITY" in *'
+'*) die "identity path contains a newline";; esac
 
 mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh" 2>/dev/null || true
 CFG="$HOME/.ssh/config"; touch "$CFG"; chmod 600 "$CFG" 2>/dev/null || true
@@ -43,8 +56,8 @@ if [ -z "$IDENTITY" ] && [ "$GEN_KEY" = 1 ]; then
 fi
 
 # --- ephemeral-floor sanity check ------------------------------------------
-low=$(awk '{print $1}' /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null)         # Linux
-[ -z "$low" ] && low=$(sysctl -n net.inet.ip.portrange.first 2>/dev/null)          # macOS/BSD
+low=$(awk '{print $1}' /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null || true)  # Linux
+[ -z "$low" ] && low=$(sysctl -n net.inet.ip.portrange.first 2>/dev/null || true)   # macOS/BSD
 low=${low:-32768}
 if [ "$PORT" -ge "$low" ]; then
   note "WARNING: port $PORT is within the ephemeral range (>= $low); it may occasionally"
@@ -70,9 +83,9 @@ awk -v b="$BEGIN" -v e="$END" '
   printf 'Host %s\n' "$ALIAS"
   printf '    HostName 127.0.0.1\n'
   printf '    Port %s\n' "$PORT"
-  printf '    User %s\n' "$LUSER"
-  [ -n "$IDENTITY" ] && printf '    IdentityFile %s\n' "$IDENTITY"
-  printf '    UserKnownHostsFile %s\n' "$KH"
+  printf '    User %s\n' "$(ssh_config_value "$LUSER")"
+  [ -n "$IDENTITY" ] && printf '    IdentityFile %s\n' "$(ssh_config_value "$IDENTITY")"
+  printf '    UserKnownHostsFile %s\n' "$(ssh_config_value "$KH")"
   printf '    StrictHostKeyChecking accept-new\n'
   printf '    ServerAliveInterval 30\n'
   printf '    ServerAliveCountMax 3\n'

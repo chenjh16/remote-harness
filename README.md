@@ -36,14 +36,14 @@
 
 你的**编码 Agent**(Claude Code / Codex / opencode)和你的**代码库**经常不在同一台机器上。
 `remote-harness` 把两者连起来:用 sshfs 把代码挂到 Agent 所在机器的一个空目录,注入一条规则让
-**编译/测试在「代码所在的那台机器」上跑**,然后在挂载目录里启动 Agent。整个过程通过
-`/remote-harness` 触发,中间所有信息都**交互式向你确认**,最后给你**一条可复制执行的命令**。
+**编译/测试在「代码所在的那台机器」上跑**,然后在挂载目录里启动 Agent。Claude Code/opencode 通过
+`/remote-harness` 触发;Codex 直接输入 `remote-harness`(无斜杠)。中间所有信息都**交互式向你确认**,最后给你**一条可复制执行的命令**。
 
 记号:**A** = 运行 Agent 的机器;**P** = 存放代码的机器(用一个 ssh `<别名>` 指代)。
 
 ### 工作原理(两个方向)
 
-启动 `/remote-harness` 后,它会**先问你方向**(不自动猜),然后逐项确认目录:
+启动后,它会**先问你方向**(不自动猜),然后逐项确认目录:
 
 **① 反向(reverse)— Agent 在远程盒子,代码在你的笔记本(NAT 后)**
 
@@ -85,17 +85,19 @@
 
 ### 使用
 
-在你的 Agent 里运行 `/remote-harness`(加 yolo:`/remote-harness 开启yolo模式`)。它会:
+在你的 Agent 里启动 remote-harness:Claude Code/opencode 运行 `/remote-harness`(加 yolo:
+`/remote-harness 开启yolo模式`);Codex 输入 `remote-harness`(加 yolo:`remote-harness 开启yolo模式`)。它会:
 
 1. **问你方向**(reverse / forward;基于是否在 SSH 会话里预选默认项,但一定会问)。
 2. **一次性预检**(环境 / sshfs+FUSE / 隧道或服务器可达性),卡在第一个缺失项并给出补救命令。
 3. **逐项确认目录**:代码在哪个目录、挂载/启动在哪个空目录——都给候选+可自由输入。
 4. 生成**一条可复制执行的命令**:挂载 + 启动 Agent(reverse 在笔记本上跑,forward 在本机上跑)。
-5. 退出 Agent 时**自动卸载**。随时再跑 `/remote-harness` 重新连接(幂等;陈旧挂载会被检测并重挂)。
+5. 退出 Agent 时**自动卸载**。随时再次启动 remote-harness 重新连接(幂等;陈旧挂载会被检测并重挂)。
 
 ### 环境要求
 
-- 你已经能从一台机器 ssh 到另一台(任意端口 / 跳板机都行)。
+- 你已经能从一台机器 ssh 到另一台(任意端口 / 常见 `-J` 跳板机都行)。复杂 SSH 选项
+  (`ProxyCommand`、`-F`、带空格的引号路径、本地转发等)请先写进 `~/.ssh/config` 的 `Host` 别名，再把别名交给 remote-harness。
 - **反向**:盒子的 sshd 允许 TCP 转发(默认即可);笔记本开启 SSH 服务,并已把盒子公钥加入
   `~/.ssh/authorized_keys`(脚本会打印要加的 key 和配置行)。
 - **挂载发生的那台机器需要 `sshfs` + FUSE**——反向是盒子、正向是本机:
@@ -143,8 +145,8 @@ remote-harness/
 
 详见 `reference/reverse.md` / `reference/forward.md` 末尾。常见:
 - macOS 提示要 macFUSE → 改用 FUSE-T(见[环境要求](#环境要求))。
-- 会话中文件突然读不了(`Transport endpoint is not connected`)→ 隧道断了,退出 Agent 重跑
-  `/remote-harness`,会自动检测陈旧挂载并重挂。
+- 会话中文件突然读不了(`Transport endpoint is not connected`)→ 隧道断了,退出 Agent 后再次启动
+  remote-harness,会自动检测陈旧挂载并重挂。
 - 挂载报 `not-empty` → 换一个空目录(脚本会提示)。
 
 ---
@@ -167,13 +169,14 @@ remote-harness/
 Your **coding agent** (Claude Code / Codex / opencode) and your **codebase** often live on different
 machines. `remote-harness` connects them: it sshfs-mounts the code onto an empty dir where the agent
 runs, injects a rule so **builds/tests run on the machine that hosts the code**, and launches the
-agent in the mount. You trigger it with `/remote-harness`; it **interactively confirms every choice**
-and hands you **one copy-paste command** to finish. Generically: **A** = the machine the agent runs
-on; **P** = the machine the code lives on (an ssh `<alias>`).
+agent in the mount. Claude Code/opencode trigger it with `/remote-harness`; Codex users type
+`remote-harness` (no slash). It **interactively confirms every choice** and hands you **one
+copy-paste command** to finish. Generically: **A** = the machine the agent runs on; **P** = the
+machine the code lives on (an ssh `<alias>`).
 
 ### How it works (two directions)
 
-`/remote-harness` **always asks the direction first** (never auto-decides), then confirms each dir:
+remote-harness **always asks the direction first** (never auto-decides), then confirms each dir:
 
 **① Reverse — agent on a remote box, code on your laptop (behind NAT).** The box can't dial the
 laptop, so the laptop opens a **reverse SSH tunnel** and its project is sshfs-mounted onto the box.
@@ -214,7 +217,8 @@ custom command that reads the shared `SKILL.md`.
 
 ### Usage
 
-Run `/remote-harness` in your agent (add yolo: `/remote-harness yolo`). It will:
+Start remote-harness in your agent: Claude Code/opencode run `/remote-harness` (add yolo:
+`/remote-harness yolo`); Codex users type `remote-harness` (add yolo: `remote-harness yolo`). It will:
 
 1. **Ask the direction** (reverse / forward; pre-selected from whether you're in an SSH session, but
    always asked).
@@ -224,12 +228,14 @@ Run `/remote-harness` in your agent (add yolo: `/remote-harness yolo`). It will:
    free-text).
 4. Emit **one copy-paste command**: mount + launch the agent (reverse runs it on the laptop; forward
    on this machine).
-5. **Auto-unmounts on exit.** Re-run `/remote-harness` anytime to reconnect (idempotent; a stale
+5. **Auto-unmounts on exit.** Start remote-harness again anytime to reconnect (idempotent; a stale
    mount is detected and replaced).
 
 ### Requirements
 
-- You can already ssh from one machine to the other (any port / jump host is fine).
+- You can already ssh from one machine to the other (any port / common `-J` jump host is fine).
+  For complex SSH options (`ProxyCommand`, `-F`, quoted paths with spaces, local forwards, etc.),
+  put them in `~/.ssh/config` as a `Host` alias and give remote-harness that alias.
 - **Reverse**: the box's sshd allows TCP forwarding (default); the laptop has an SSH server and the
   box's public key in `~/.ssh/authorized_keys` (the script prints the exact key + config line).
 - **The machine that does the MOUNT needs `sshfs` + FUSE** — the box (reverse) or your local machine
@@ -279,5 +285,5 @@ remote-harness/
 See the end of `reference/reverse.md` / `reference/forward.md`. Common ones:
 - macOS asks for macFUSE → use FUSE-T instead (see [Requirements](#requirements)).
 - Files become unreadable mid-session (`Transport endpoint is not connected`) → the tunnel dropped;
-  exit the agent and re-run `/remote-harness` (it detects the stale mount and remounts).
+  exit the agent and start remote-harness again (it detects the stale mount and remounts).
 - Mount reports `not-empty` → pick a different empty dir (the script prompts).

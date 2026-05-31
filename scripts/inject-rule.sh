@@ -27,6 +27,8 @@
 # so 'on'/'off' agree without extra state and concurrent harness sessions don't clash.
 set -uo pipefail
 
+sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
 session_dir() {  # $1 = mountpoint (session key) -> box-side per-session dir
   key="$(printf '%s' "${1:-default}" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
   printf '%s/.sessions/%s' "${RH_HOME:-$HOME/.remote-harness}" "$key"
@@ -114,7 +116,7 @@ case "${1:-}" in
     env_out=""; flags_out=""
     case "$agent" in
       claude)
-        flags_out="--append-system-prompt-file $RULE"
+        flags_out="--append-system-prompt-file $(sq "$RULE")"
         ;;
       opencode)
         # OPENCODE_CONFIG is merged ADDITIVELY on top of the user's global + project configs, so we
@@ -126,7 +128,7 @@ case "${1:-}" in
         # JSON-escape the rule path: escape \ then " (both legal in Unix paths; rare but correct).
         rule_json="$(printf '%s' "$RULE" | sed 's/\\/\\\\/g; s/"/\\"/g')"
         printf '{ "$schema": "https://opencode.ai/config.json", %s"instructions": ["%s"] }\n' "$perm" "$rule_json" > "$CFG"
-        env_out="OPENCODE_CONFIG=$CFG"
+        env_out="OPENCODE_CONFIG=$(sq "$CFG")"
         ;;
       codex)
         # Per-session CODEX_HOME: symlink the real ~/.codex entries (auth.json, config.toml, state
@@ -144,7 +146,7 @@ case "${1:-}" in
         # Preserve the user's personal global guidance AND append our rule (don't silently drop it).
         { [ -f "$HOME/.codex/AGENTS.md" ] && { cat "$HOME/.codex/AGENTS.md"; printf '\n\n'; }
           cat "$RULE"; } > "$CH/AGENTS.md" 2>/dev/null || cp "$RULE" "$CH/AGENTS.md"
-        env_out="CODEX_HOME=$CH"
+        env_out="CODEX_HOME=$(sq "$CH")"
         # codex's default sandbox gates network, which blocks the rule's `ssh <host> ...`. The
         # `[sandbox_workspace_write]` sub-table only merges when workspace-write is EXPLICITLY
         # selected, so `-s workspace-write` is required — `network_access` alone at the implicit
@@ -157,7 +159,7 @@ case "${1:-}" in
         # shell's `-lic` re-parse and reach codex's TOML parser as ["~/.ssh"] (a bare [~/.ssh] is
         # invalid TOML). For heavy/long codex sessions `/remote-harness yolo` (drops the sandbox) is
         # still simpler. Verify writable_roots ~ expansion on real codex.
-        [ "$yolo" = 1 ] && flags_out="" || flags_out="-s workspace-write -c sandbox_workspace_write.network_access=true -c 'sandbox_workspace_write.writable_roots=[\"~/.ssh\"]'"
+        [ "$yolo" = 1 ] && flags_out="" || flags_out="-s workspace-write -c sandbox_workspace_write.network_access=true -c $(sq 'sandbox_workspace_write.writable_roots=["~/.ssh"]')"
         ;;
     esac
     printf 'RH_STATUS=INJECTED\n'

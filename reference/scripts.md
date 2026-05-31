@@ -35,8 +35,8 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
   injects the run-on-server rule, and launches the agent locally in the mount; unmounts on exit.
   Args: `--via '<ssh-args|alias>' --remote-path '<dir>' [--mountpoint '<dir>'] --launch <cli> [--yolo]`.
 - `"$RH/scripts/laptop-setup.sh"` — **(reverse) runs on the LAPTOP**: Phases 1-5 fully automated.
-  Phase 1: SSH server, authorized key, RemoteForward config. Phase 2: reconnect. Phase 3: pick
-  project dir (`--project-dir` to skip the prompt). Phase 4: sshfs mount on remote (retries
+  Phase 1: SSH server, authorized key, RemoteForward config. Phase 2: reconnect. Phase 3: validate
+  project dir (`--project-dir` supplies the confirmed default; invalid paths prompt again). Phase 4: sshfs mount on remote (retries
   interactively on sshfs-missing / non-empty). Phase 5: inject the run-on-laptop rule, then launch
   the chosen agent (`--launch`, default `claude`).
 - `"$RH/scripts/inject-rule.sh"` — **runs where the agent runs** (the box in reverse, the local
@@ -45,11 +45,11 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
   `$RH_HOME/.sessions/<key>` and prints how to launch so ONLY this session reads the rule —
   **nothing global, nothing in the mounted repo**. It prints `RH_STATUS`, `RH_LAUNCH_ENV`,
   `RH_LAUNCH_FLAGS`:
-    - claude   → `RH_LAUNCH_FLAGS=--append-system-prompt-file <rule>` (session flag)
-    - opencode → `RH_LAUNCH_ENV=OPENCODE_CONFIG=<session cfg>` (instructions; +`permission:"allow"` if yolo)
-    - codex    → `RH_LAUNCH_ENV=CODEX_HOME=<session home>` (real auth/config symlinked; our `AGENTS.md`;
+    - claude   → `RH_LAUNCH_FLAGS=--append-system-prompt-file '<rule>'` (session flag)
+    - opencode → `RH_LAUNCH_ENV=OPENCODE_CONFIG='<session cfg>'` (instructions; +`permission:"allow"` if yolo)
+    - codex    → `RH_LAUNCH_ENV=CODEX_HOME='<session home>'` (real auth/config symlinked; our `AGENTS.md`;
       non-yolo also gets `RH_LAUNCH_FLAGS=-s workspace-write -c sandbox_workspace_write.network_access=true
-      -c sandbox_workspace_write.writable_roots=["~/.ssh"]` so the sandbox permits the rule's outbound ssh
+      -c 'sandbox_workspace_write.writable_roots=["~/.ssh"]'` so the sandbox permits the rule's outbound ssh
       AND lets ssh write its ControlMaster socket / known_hosts under `~/.ssh` — `-s` is required, the
       sub-table is ignored at the implicit default. For heavy/long codex sessions `/remote-harness yolo`
       (drops the sandbox) is still simplest.)
@@ -59,4 +59,8 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
   manifests. Both setup scripts splice `RH_LAUNCH_ENV`/`RH_LAUNCH_FLAGS` into the launch and call
   `off <agent> <mountpoint>` (removes the session dir) on exit.
 - `"$RH/scripts/_common.sh"` — shared helpers sourced by both setup scripts (colors, `ask`, `sq`,
-  `parse_via`, `write_managed_alias`, OS vars). Not an entry point.
+  `parse_via`, `write_managed_alias`, OS vars). `parse_via` preserves user/port/identity and
+  `ProxyJump` (`-J` / `-o ProxyJump=...`) when a setup script writes a managed ssh alias. It
+  deliberately rejects unsupported raw SSH semantics (`ProxyCommand`, `-F`, local forwards, quoted
+  tokens with spaces): users should put those in `~/.ssh/config` as a `Host` alias and pass the
+  alias. Not an entry point.
