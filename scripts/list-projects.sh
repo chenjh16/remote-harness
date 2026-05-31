@@ -50,8 +50,10 @@ fi
 tmp=$(mktemp "${TMPDIR:-/tmp}/rh-projects.XXXXXX") || exit 1
 trap "rm -f \"$tmp\"" EXIT HUP INT TERM
 skip_dir() {
-  b=${1##*/}
-  case "$b" in node_modules|.cache|.venv|vendor|Library) return 0;; *) return 1;; esac
+  # NOTE: use a private var name — `b`/`a`/`c`/`r` are the scan_projects loop vars,
+  # and clobbering them here silently drops depth-2/3 repos.
+  _skip_base=${1##*/}
+  case "$_skip_base" in node_modules|.cache|.venv|vendor|Library) return 0;; *) return 1;; esac
 }
 emit_if_project() { [ -d "$1/.git" ] && printf "%s\n" "$1"; }
 scan_projects() {

@@ -50,6 +50,7 @@ assert_grep "$CFG" "    ProxyJump otherjump" "managed alias replacement"
 
 remote_root="$tmp/root with 'quote"
 mkdir -p "$remote_root/project"
+mkdir -p "$remote_root/sub/deeprepo/.git"   # depth-2 git repo — only scan_projects reaches it
 mkdir -p "$tmp/bin"
 cat > "$tmp/bin/ssh" <<'EOS'
 #!/usr/bin/env bash
@@ -60,6 +61,8 @@ chmod +x "$tmp/bin/ssh"
 PATH="$tmp/bin:$PATH" "$ROOT/scripts/list-projects.sh" \
   --via dummy --root "$remote_root" --limit 5 > "$tmp/projects.out"
 assert_grep "$tmp/projects.out" "PROJECT	$remote_root/project	-" "remote root quoting"
+
+assert_grep "$tmp/projects.out" "$remote_root/sub/deeprepo" "depth-2 git repo via scan_projects (skip_dir clobber regression)"
 
 mkdir -p "$tmp/code" "$tmp/mount" "$tmp/home with 'quote/.codex" "$tmp/rh with 'quote"
 printf 'personal guidance\n' > "$tmp/home with 'quote/.codex/AGENTS.md"

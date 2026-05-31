@@ -263,7 +263,7 @@ def main() -> int:
                 or sent_direction
             ):
                 # Prefer the first generated ssh candidate. The historical flow
-                # typed "ssh intellios", but choosing a concrete candidate keeps
+                # typed "ssh <alias>", but choosing a concrete candidate keeps
                 # this smoke test deterministic without exercising free-form notes.
                 send_option(child, prompt_view, "1", "select first ssh connection candidate")
                 sent_connect = True
