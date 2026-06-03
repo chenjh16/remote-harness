@@ -48,6 +48,15 @@ unanswered decision.
 > `REALUSER_GUESS` → namespace) only pre-selects the likely option; it must NOT skip the question.
 > Never silently assume the user's intent.
 
+> **Speed — ask, don't fish (REQUIRED).** Keep the whole flow to a few questions. Probe **locally,
+> once** (batch the helper scripts into one Bash call; never re-run a script just to read its stderr),
+> then batch the user decisions into as few AskUserQuestion rounds as possible. **Never discover the
+> user's project by remote search** — no `list-projects.sh --via`, no `ssh <alias> 'find …'`/`ls`. It
+> is slow and routinely misleads (the project may live under a *different* remote account than
+> detection guesses). Recommend only from cheap, local/cached signals — `session-cache.sh`,
+> `~/.ssh/config`, the cwd, the connect/server guesses — and always offer a typed "Other". A typed
+> path is validated by the setup script, which re-prompts if it's wrong.
+
 > **Cross-agent question tool policy:** wherever the steps say "**AskUserQuestion**", use the
 > runtime's structured user-input tool when one is available. Claude Code: use `AskUserQuestion`.
 > Codex: if `request_user_input` is listed and available for the current collaboration mode, use it

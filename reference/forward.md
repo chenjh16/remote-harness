@@ -7,6 +7,12 @@ command both run on THIS machine. Keep the same continuous, question-tool-gated 
 legitimate stops are an sshfs-install gate and the final hand-off. Helper-script contracts:
 `$RH/reference/scripts.md`.
 
+**Speed: ask, don't fish.** This must be fast — a few questions and the local command is ready.
+**Never scan the server to discover the project** (no `list-projects.sh --via`, no `ssh <server>
+'find …'`): it's slow and low-value. The user **types** the server project path; recommend only from
+cheap signals — the per-server cache (`session-cache.sh`), `~/.ssh/config`, `server-guesses.sh` — and
+always offer a typed "Other". The mount validates the path; a wrong one just re-prompts.
+
 ## F-0 — Preflight (local)
 
 ```bash
@@ -30,17 +36,19 @@ legitimate stops are an sshfs-install gate and the final hand-off. Helper-script
   (`ProxyCommand`, `-F`, quoted paths with spaces, local forwards, etc.), tell the user to put that
   in `~/.ssh/config` as a `Host` alias and provide the alias.
 
-## F-2 — Pick the project dir on the server
+## F-2 — Pick the project dir on the server (type it; don't scan)
 
 ```bash
-"$RH/scripts/preflight.sh" --direction forward --server '<CONNECT>'   # re-run now that we know the server
+"$RH/scripts/session-cache.sh" get "<SERVER_TOKEN>"                            # LAST_PROJECT_DIR/LAST_MOUNTPOINT (empty on first run)
+"$RH/scripts/preflight.sh" --direction forward --server '<CONNECT>' --no-list  # reachability ONLY — no project scan
 ```
 - `SERVER_REACHABLE=0` → help fix ssh/keys (they may just be prompted for a password — warn the
   session won't be non-interactive), then re-run. Do NOT end the turn.
-- The `---PROJECTS---` list gives candidate dirs. **AskUserQuestion**: "Which project directory on
-  the server?" Codex structured input gets only the best 2-3 `PROJECT` paths plus Other/free-form;
-  Claude/chat may show a longer list. Auto recommendations are a convenience: if scanning is sparse
-  or fails, ask for a manual absolute path through Other. → `REMOTE_PROJECT_DIR`.
+- **AskUserQuestion**: "Which project directory on the server?" Pre-fill `LAST_PROJECT_DIR` if cached;
+  otherwise the user **types the absolute server path** (e.g. `/srv/app`) via Other. Do NOT scan the
+  server (`list-projects.sh` / `ssh … find`) — it's slow and low-value; the typed path is validated
+  when the mount runs. → `REMOTE_PROJECT_DIR`. (`<SERVER_TOKEN>` = the `HOST`/alias token from F-1,
+  used as the cache key.)
 
 ## F-2.5 — Confirm the local mountpoint (required)
 
@@ -55,6 +63,14 @@ legitimate stops are an sshfs-install gate and the final hand-off. Helper-script
 
 Use the `<LOCAL_MP>` (and whether to pass `--mountpoint`) decided in **F-2.5**, and the
 `<REMOTE_PROJECT_DIR>` from **F-2** — both user-confirmed, not guessed.
+
+Before emitting, remember the choices so a re-run for this server pre-fills instantly:
+
+```bash
+"$RH/scripts/session-cache.sh" put <SERVER_TOKEN> \
+  "LAST_PROJECT_DIR=<REMOTE_PROJECT_DIR>" "LAST_VIA=<CONNECT>" \
+  "LAST_MOUNTPOINT=<LOCAL_MP>" "LAST_LAUNCH=<LAUNCH>"
+```
 
 Print **exactly** (short, `\`-continued lines):
 

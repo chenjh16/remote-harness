@@ -123,7 +123,7 @@ remote-harness/
 │   ├── server-guesses.sh     # 正向:推断出站服务器目标
 │   ├── laptop-setup.sh       # 反向编排(在笔记本上跑)
 │   ├── local-setup.sh        # 正向编排(在本机上跑)
-│   ├── mount-project.sh inject-rule.sh list-projects.sh   # 两向复用
+│   ├── mount-project.sh inject-rule.sh list-projects.sh session-cache.sh  # 两向复用
 ├── adapters/{codex,opencode}.md   # 各 Agent 的入口(只设置 --launch)
 ├── manage.sh                 # 安装 / --dev / --uninstall
 ├── docs/design.md            # 设计文档(架构/分层/不变量;+ .cn.md)
@@ -269,7 +269,7 @@ remote-harness/
 │   ├── detect.sh setup-tunnel.sh connect-guesses.sh check-tunnel.sh  # reverse
 │   ├── server-guesses.sh local-setup.sh      # forward
 │   ├── laptop-setup.sh                        # reverse orchestrator
-│   └── mount-project.sh inject-rule.sh list-projects.sh   # shared by both
+│   └── mount-project.sh inject-rule.sh list-projects.sh session-cache.sh  # shared by both
 ├── adapters/{codex,opencode}.md
 ├── manage.sh
 ├── docs/design.md                   # architecture / layering / invariants (+ .cn.md)

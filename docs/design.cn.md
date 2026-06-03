@@ -101,7 +101,8 @@ Agent 自己从不挂载任何东西。它拼出**一条命令**，由用户在�
 | `server-guesses.sh` | 正向 | 猜测出站 ssh 目标（服务器） | `ssh <target>` 行 |
 | `check-tunnel.sh` | 反向 | 验证监听器 + 通过隧道真实登录 | `SSH=up\|down`、`LAPTOP_HOSTNAME/USER` |
 | `mount-project.sh` | 两向 | sshfs 挂载/卸载到本地路径 | `STATUS=mounted\|already-mounted\|need-sshfs\|not-empty\|failed\|unmounted` |
-| `list-projects.sh` | 两向 | 枚举候选项目目录（本地或 `--via`） | `PROJECT\t<路径>\tgit:<分支>` |
+| `list-projects.sh` | 两向 | 枚举候选项目目录（**仅按需** —— 流程让用户输入路径，不扫描） | `PROJECT\t<路径>\tgit:<分支>` |
+| `session-cache.sh` | 两向 | 记住某命名空间上次的连接选择，让重复运行瞬间预填 | `LAST_PROJECT_DIR`/`LAST_VIA`/`LAST_LOGIN_USER`/… |
 | `inject-rule.sh` | 两向 | 会话级"在 P 上构建"规则 + 各 Agent 启动参数 | `RH_STATUS`、`RH_LAUNCH_ENV`、`RH_LAUNCH_FLAGS` |
 
 ### 第 4 层 —— 共享库
@@ -206,6 +207,9 @@ linter / 语言服务器，会把错误 OS/架构的产物污染进挂载、悄�
    `set -uo pipefail`（不用 `-e`）。
 6. **stdout 输出 `KEY=VALUE`，stderr 输出人工提示** —— 解析契约。
 7. **双语文档** —— 每份 `*.md` 都配 `*.cn.md`（`README.md`、`CLAUDE.md` 除外）。
+8. **问，别钓；最少提问。** 本地**只探测一次**并合并决策；**绝不远程搜索去发现用户的项目**（慢，且当项目在
+   与检测猜测不同的远程账户下时会带偏）。推荐只来自便宜的本地/缓存信号（`session-cache.sh`、`~/.ssh/config`、
+   cwd、连接/服务器猜测），并永远提供"自己输入"——setup 脚本会校验输入路径并在出错时重提示。
 
 ## 9. 生命周期、幂等性与清理
 
@@ -245,7 +249,7 @@ remote-harness/
 │   ├── server-guesses.sh        # 正向探针
 │   ├── laptop-setup.sh          # 第 2 层：反向编排（独立）
 │   ├── local-setup.sh           # 第 2 层：正向编排
-│   └── mount-project.sh inject-rule.sh list-projects.sh   # 两向复用
+│   └── mount-project.sh inject-rule.sh list-projects.sh session-cache.sh   # 两向复用
 ├── adapters/{codex,opencode}.md # Agent 入口说明（设置 --launch）
 ├── manage.sh                    # 安装 / --dev / --uninstall
 ├── docs/design.md               # 本文档（+ .cn.md）

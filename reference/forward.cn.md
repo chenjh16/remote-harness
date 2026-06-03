@@ -4,6 +4,8 @@
 
 Agent（即你）运行在用户的**本地机器**上；项目位于本机可直接 ssh 访问的远程服务器。无需隧道——所有操作均在本机和直连 ssh 之间进行，因此技能和生成的命令都在**本机**执行。保持一贯的、由提问工具把关的连续流程（遵守 SKILL.md 中的**"确认，不要推断"**原则和跨代理提问工具策略）；合法的暂停点只有 sshfs 安装检查和最终的移交。辅助脚本契约见 `$RH/reference/scripts.cn.md`。
 
+**速度原则：问，别钓。** 这必须快——问几个问题，本地命令就好了。**绝不扫描服务器去发现项目**（不要 `list-projects.sh --via`，不要 `ssh <server> 'find …'`）：慢且价值低。让用户**输入**服务器项目路径；推荐只来自便宜信号——按服务器的缓存（`session-cache.sh`）、`~/.ssh/config`、`server-guesses.sh`——并永远提供"自己输入"。挂载会校验路径；错了只是重新提示。
+
 ## F-0 — 预检（本地）
 
 ```bash
@@ -21,13 +23,14 @@ Agent（即你）运行在用户的**本地机器**上；项目位于本机可�
 - 提取 `CONNECT` = 去掉开头 `ssh` 的参数（如 `myserver` 或 `-p 2222 dev@host`）。
 - 支持的原始 `CONNECT` 形式包括主机/别名、可选的 `user@host`、`-p`/`-l`/`-i`，以及不需要 shell 引号的 `-J` / `-o ProxyJump=...`。若需要复杂 SSH 行为（`ProxyCommand`、`-F`、带空格的引号路径、本地转发等），请让用户先写进 `~/.ssh/config` 的 `Host` 别名，然后提供该别名。
 
-## F-2 — 选择服务器上的项目目录
+## F-2 — 选择服务器上的项目目录（输入，别扫描）
 
 ```bash
-"$RH/scripts/preflight.sh" --direction forward --server '<CONNECT>'   # re-run now that we know the server
+"$RH/scripts/session-cache.sh" get "<SERVER_TOKEN>"                            # LAST_PROJECT_DIR/LAST_MOUNTPOINT（首次为空）
+"$RH/scripts/preflight.sh" --direction forward --server '<CONNECT>' --no-list  # 仅检查可达性——不扫描项目
 ```
 - `SERVER_REACHABLE=0` → 协助修复 ssh/密钥问题（用户可能只是被要求输入密码——提醒会话将非交互式），然后重新运行。不要结束本轮对话。
-- `---PROJECTS---` 列表提供候选目录。**AskUserQuestion**："服务器上的项目目录是哪个？"——Codex 结构化输入只放最佳 2-3 个 `PROJECT` 路径并保留"其他"/自由输入；Claude/聊天可以展示更长列表。自动推荐只是便利功能：若扫描结果很少或失败，就通过"其他"让用户手动输入绝对路径。→ `REMOTE_PROJECT_DIR`。
+- **AskUserQuestion**："服务器上的项目目录是哪个？"——有缓存就预填 `LAST_PROJECT_DIR`；否则让用户通过"其他"**输入服务器上的绝对路径**（如 `/srv/app`）。**不要扫描服务器**（`list-projects.sh` / `ssh … find`）——慢且价值低；输入的路径会在挂载时被校验。→ `REMOTE_PROJECT_DIR`。（`<SERVER_TOKEN>` = F-1 里的 `HOST`/别名，用作缓存键。）
 
 ## F-2.5 — 确认本地挂载点（必须）
 
@@ -39,6 +42,14 @@ Agent（即你）运行在用户的**本地机器**上；项目位于本机可�
 ## F-3 — 生成本地命令 — 然后你的任务完成
 
 使用 **F-2.5** 确定的 `<LOCAL_MP>`（以及是否传入 `--mountpoint`），以及 **F-2** 中用户确认的 `<REMOTE_PROJECT_DIR>`——均来自用户确认，不得猜测。
+
+出命令前，记住这些选择，让该服务器下次运行瞬间预填：
+
+```bash
+"$RH/scripts/session-cache.sh" put <SERVER_TOKEN> \
+  "LAST_PROJECT_DIR=<REMOTE_PROJECT_DIR>" "LAST_VIA=<CONNECT>" \
+  "LAST_MOUNTPOINT=<LOCAL_MP>" "LAST_LAUNCH=<LAUNCH>"
+```
 
 **完整打印**以下内容（简短，用 `\` 续行）：
 

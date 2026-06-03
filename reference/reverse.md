@@ -20,126 +20,113 @@ this box:  ssh <BOX_ALIAS>          → 127.0.0.1:<PORT> → (tunnel) → laptop
 The laptop just needs to reconnect with `RemoteForward` in its config. The `BOX_ALIAS` (e.g.
 `my-mac`) is the alias this box uses to reach the laptop.
 
-## Step 0 — Identify the real user (namespace), then preflight
+## Speed: ask, don't fish
 
-A box account may be **shared by several people**, each running remote-harness to their own laptop.
-To stop their reverse tunnels from colliding — or, worse, cross-wiring `ssh <alias>` to the WRONG
-laptop — we namespace the tunnel (ssh alias + reverse port) per **real user**. So first identify that
-namespace, then preflight against it.
+This flow must be **fast** — a few questions and the laptop command is ready. Two hard rules:
 
-### 0a. Confirm the namespace (`RU`) — ask, don't infer
+- **Never discover the user's project by remote search.** Do NOT run `list-projects.sh --via`, and do
+  NOT `ssh <alias> 'find …'`/`ls` to hunt for the laptop project. It is slow and it routinely
+  *misleads* — the project may live under a **different laptop account** than you'd guess (e.g. a
+  `chenjh` tunnel but a `/Users/substance/…` project). The user types the path; `laptop-setup.sh`
+  validates it on the laptop and re-prompts if wrong.
+- **Recommend only from cheap, local/cached signals**, and always offer a typed "Other": the
+  per-namespace cache (`session-cache.sh`), this box's `~/.ssh/config`, the cwd, and
+  `connect-guesses.sh`. Probe locally **once**, then batch the questions.
 
-```bash
-"$RH/scripts/detect.sh"   # REALUSER_GUESS/SOURCE/CANDIDATES, SUGGESTED_PORT (RU-stable),
-                          # LAPTOP_USER_GUESS, DEFAULT_IDENTITY, SSHD_TCP_FORWARDING
-```
+A box account may also be **shared by several people**, each running to their own laptop — so the
+tunnel (ssh alias + reverse port) is namespaced per **real user** (`RU`); confirming `RU` is one of
+the batched questions below.
 
-`REALUSER_GUESS` is a best-effort guess of who you are on this account, derived (in priority order)
-from the public-key comment THIS session logged in with (needs sshd `ExposeAuthInfo yes`, usually
-off), the first `~/<name>/…` component of the launch dir (the soft per-user convention), or an
-authorized_keys comment. `REALUSER_SOURCE` says which fired; `REALUSER_CANDIDATES` lists the others.
-
-**AskUserQuestion (Confirm, don't infer):** "在这个（可能共享的）账号上，用什么名字给你的隧道做命名空间？"
-— pre-fill `REALUSER_GUESS`, offer `REALUSER_CANDIDATES` + Other/free-form. Call the answer **`RU`**.
-Your box-side alias is **`<RU>-mac`**; your reverse port is derived stably from `RU`. If
-`REALUSER_GUESS` is empty (e.g. you launched straight from `$HOME`, or the dir is a generic
-`work`/`src`), you MUST ask outright — there is no safe default.
-
-### 0b. Preflight against your namespace
+## Step 0 — One local probe (single Bash call; run each script ONCE)
 
 ```bash
-"$RH/scripts/preflight.sh" --alias <RU>-mac --no-list   # --no-list: defer project scan to §1b.5
+RH="${RH_HOME:-$HOME/.remote-harness}"
+"$RH/scripts/detect.sh"                                 # REALUSER_GUESS/SOURCE/CANDIDATES, SUGGESTED_PORT, DEFAULT_IDENTITY, SSHD_TCP_FORWARDING
+"$RH/scripts/connect-guesses.sh"                        # candidate laptop→box `ssh …` strings
+"$RH/scripts/session-cache.sh" get "<REALUSER_GUESS>"   # LAST_PROJECT_DIR/LAST_VIA/LAST_LOGIN_USER/LAST_MOUNTPOINT (empty on first run)
+"$RH/scripts/preflight.sh" --alias "<REALUSER_GUESS>-mac" --no-list   # tunnel up? + sshfs/FUSE + PROJECT_DIR/PROJECT_DIR_EMPTY (cwd)
 ```
 
-Read `PREFLIGHT`:
+Run all four in **one** Bash block and parse stdout (`KEY=VALUE`). Don't run a script twice to "see
+stderr" — stderr is just human notes. `<REALUSER_GUESS>` comes from `detect.sh`; if it's **empty**,
+drop the `session-cache get` and `preflight --alias` lines from this probe (there's no namespace yet),
+confirm `RU` first in Step 1, then run `preflight --alias <RU>-mac` once. Read:
 
-- **`ok`** → YOUR namespaced tunnel (`<RU>-mac`) already reaches your laptop (`TUNNEL_ALIAS`,
-  `TUNNEL_PORT`, `LAPTOP_HOSTNAME`). Nothing to build — emit the laptop command immediately (see
-  § emit-only variant). This is ALSO the **same-user / another-project** path: one tunnel+port carries
-  any number of sshfs mounts, so a second project just remounts over the existing tunnel — no new port.
-- **`blocked`** — handle `BLOCKED_STEP`:
-  - `tunnel` → your `<RU>-mac` tunnel isn't up yet → go to **Step 1** (below).
-  - `sshfs` → sshfs/FUSE missing: show `REMEDY`, AskUserQuestion ("installed? ✅/⚠️"),
-    re-run on ✅; on ⚠️ read the problem and help. Loop until resolved.
+- `SSHD_TCP_FORWARDING=restricted-needs-attention` → warn the box sshd blocks reverse forwarding
+  (`AllowTcpForwarding no|local`); the user must set `yes`/`remote` + restart sshd.
+- `PREFLIGHT=ok` → your `<RU>-mac` tunnel already reaches your laptop (`TUNNEL_ALIAS`, `TUNNEL_PORT`,
+  `LAPTOP_HOSTNAME`/`LAPTOP_USER`). This is the **reuse** path (incl. same-user / another-project — one
+  tunnel carries any number of mounts): no new tunnel, just confirm the few values then emit-only.
+- `PREFLIGHT=blocked` + `BLOCKED_STEP=sshfs` → show `REMEDY`, AskUserQuestion ("installed? ✅/⚠️"),
+  re-run on ✅. `BLOCKED_STEP=tunnel` → you'll build it in Step 2.
+- `LAST_*` present → a prior session for this namespace; use them as the **pre-filled defaults** below,
+  so a repeat run is near one-click.
 
-Passing `--alias <RU>-mac` makes preflight consider ONLY your own tunnel — on a shared account it must
-never reuse another user's loopback alias and silently mount the wrong laptop.
+(`--alias <RU>-mac` makes preflight consider ONLY your own tunnel — on a shared account it must never
+reuse another user's loopback alias and mount the wrong laptop. The mountpoint must be empty because
+sshfs hides existing files.)
 
-`PROJECT_DIR` / `PROJECT_DIR_EMPTY` feed the **box mountpoint** decision in Step 1b.5 (they don't
-gate proceeding). The mountpoint must be empty because sshfs hides existing files.
+## Step 1 — Confirm direction, then ask everything in ONE batch
 
-## Step 1 — Build the tunnel and hand over to the laptop
+First confirm the **direction** (detection only pre-selects: `SSH_CONNECTION` set / `ON_REMOTE=1` ⇒
+reverse). Then ask the reverse decisions **together** (AskUserQuestion takes up to 4) — every value
+pre-filled from Step 0, every one with a free-form "Other". On a repeat run (cache hit) most are
+one-click confirmations.
 
-### 1a. Set up the box side (detect already ran in Step 0a)
+1. **Namespace `RU`** — pre-fill `REALUSER_GUESS`; offer `REALUSER_CANDIDATES` + Other. Your box alias
+   is `<RU>-mac`, the reverse port is hashed stably from `RU`. (Empty guess ⇒ no safe default, ask.)
+2. **Laptop project dir** — the codebase to develop. Pre-fill `LAST_PROJECT_DIR` if cached; otherwise
+   the user **types the absolute path** (e.g. `/Users/you/proj`). **Never scanned, never hunted by
+   search.** → `--project-dir`.
+3. **Box mountpoint** — where it mounts on this box and the agent launches. Recommend the cwd **only
+   when empty**: `PROJECT_DIR_EMPTY=1` ⇒ pre-select "Here: `<PROJECT_DIR>`" → pass
+   `--remote-mountpoint '<PROJECT_DIR>'`. Otherwise recommend the auto `~/work/<basename>` (OMIT
+   `--remote-mountpoint`) or let the user type a different EMPTY dir.
+4. **Connect string** — how the laptop SSHes to this box (the tunnel dials back this way). Pre-fill
+   `LAST_VIA` if cached, else the best `connect-guesses.sh` candidate; + Other (e.g.
+   `-p 2222 you@203.0.113.20`, or a `~/.ssh/config` alias). Extract `CONNECT` = the ssh args without
+   the leading `ssh`, and `HOST` = the host/alias token. Supported raw forms: host/alias, `user@host`,
+   `-p`/`-l`/`-i`, `-J`/`-o ProxyJump=…` (no shell-quoting needed); for `ProxyCommand`/`-F`/quoted
+   spaces, tell the user to use a `~/.ssh/config` Host alias and pass that.
 
-If `SSHD_TCP_FORWARDING=restricted-needs-attention`: warn that this box's sshd blocks reverse
-forwarding (`AllowTcpForwarding no|local`) — user must set it to `yes`/`remote` + restart sshd.
+**Laptop login user** (`LOGIN_USER`, used to sshfs the project back) — do NOT add a separate question
+when you can derive it: `LAST_LOGIN_USER` (cache) → else the `/Users/<x>/` or `/home/<x>/` first
+component of the confirmed **project dir** → else the user in the connect string → else
+`LAPTOP_USER_GUESS`. Only AskUserQuestion when these **disagree** — e.g. the project is under
+`/Users/substance/…` but the connect user is `chenjh`; that mismatch would break the mount (the login
+user can't read another user's home), so surface it and let the user reconcile before emitting.
 
-If `DEFAULT_IDENTITY` came back **empty** (this box has no SSH key yet), pass `--gen-key` so
-`setup-tunnel.sh` creates an ed25519 key and emits a non-empty `PUBKEY`. Without it the tunnel has no
-key to authorize on the laptop, and the Phase-5 login later fails with a password prompt.
+`laptop-setup.sh` validates `--project-dir` on the laptop and loops/prompts if it's missing or
+unreadable — so a typed path is safe; you don't need to validate it from the box.
+
+## Step 2 — Build the box side, then remember the choices
+
+If `PREFLIGHT=ok` and the confirmed project + `LOGIN_USER` match the live tunnel, skip to the
+emit-only variant. Otherwise build the box endpoint (pass `--gen-key` when `DEFAULT_IDENTITY` is empty
+— without a box key the Phase-5 login prompts for a password):
 
 ```bash
 "$RH/scripts/setup-tunnel.sh" \
   --alias     <RU>-mac \
   --namespace <RU> \                # derive the STABLE reverse port from RU; omit --port
-  --user      <LAPTOP_USER_GUESS> \ # the laptop login user (distinct from RU)
+  --user      <LOGIN_USER> \        # the derived/confirmed laptop login user
   [--identity <DEFAULT_IDENTITY>] \
-  [--gen-key]   # add this when DEFAULT_IDENTITY is empty (no existing box key)
+  [--gen-key]
 ```
 
-Pass `--namespace <RU>` and **omit `--port`** so the port follows the *confirmed* `RU` (not the
-pre-confirmation `SUGGESTED_PORT`, which was hashed from the guess). `setup-tunnel.sh` hashes `RU` to
-a stable `.22` slot below the ephemeral floor and probes for a free one. Capture from output: `ALIAS`
-(`<RU>-mac`), `PORT` (the derived stable port — use it in the laptop command), `PUBKEY`. If `PUBKEY`
-is empty, re-run with `--gen-key`.
+Capture `ALIAS` (`<RU>-mac`), `PORT` (the stable port — use it in the laptop command), `PUBKEY`
+(re-run with `--gen-key` if empty).
 
-### 1b. Ask how the user connects to this box
+Then **remember** the choices so the next run for this namespace pre-fills instantly — run this in
+**both** paths (build and emit-only), right before emitting:
 
 ```bash
-"$RH/scripts/connect-guesses.sh"   # candidate ssh commands (user+public/LAN IP)
+"$RH/scripts/session-cache.sh" put <RU> \
+  "LAST_PROJECT_DIR=<LAPTOP_DIR>" "LAST_VIA=<CONNECT>" "LAST_LOGIN_USER=<LOGIN_USER>" \
+  "LAST_MOUNTPOINT=<BOX_MP>" "LAST_LAUNCH=<LAUNCH>"
 ```
 
-**AskUserQuestion**: "How do you ssh into this box from your laptop?"
-- Claude/chat may show the useful guesses directly. Codex structured input must offer only the best
-  2-3 guesses (e.g. `ssh you@203.0.113.10`); the client-provided Other/free-form answer remains the
-  place for their real command.
-- Other/free-text examples: `ssh -p 2222 you@203.0.113.20`, or a plain SSH config alias.
-
-From their answer extract:
-- `CONNECT` = the ssh *arguments only* (strip the leading `ssh` word if present),
-  e.g. `-p 2222 you@203.0.113.20`
-- `HOST` = the host/alias token, e.g. `203.0.113.20` or `my-box`
-- Supported raw `CONNECT` forms are a host/alias, optional `user@host`, `-p`/`-l`/`-i`, and `-J` /
-  `-o ProxyJump=...` with tokens that do not need shell quoting. For complex SSH behavior
-  (`ProxyCommand`, `-F`, quoted paths with spaces, local forwards, etc.), tell the user to put that
-  in `~/.ssh/config` as a `Host` alias and provide the alias.
-
-### 1b.5 Confirm BOTH directories (required — ask, don't assume)
-
-Before emitting, confirm with the user (AskUserQuestion; detected values are defaults, not decisions):
-
-1. **Box mountpoint** — where the project mounts on THIS box and the agent launches. Options:
-   - "Here: `<PROJECT_DIR>` (my current dir)" — only valid if empty (`PROJECT_DIR_EMPTY=1`); pre-select
-     this when empty. → pass `--remote-mountpoint '<PROJECT_DIR>'`.
-   - "A fresh `~/work/<project-name>` on the box (auto)" — pre-select this when the cwd is non-empty.
-     → OMIT `--remote-mountpoint` (laptop-setup derives it).
-   - Other (a different EMPTY box dir) → pass `--remote-mountpoint '<that dir>'`.
-2. **Laptop project dir** — which codebase to develop:
-   - If the tunnel is already up (`PREFLIGHT=ok`): run `"$RH/scripts/list-projects.sh" --via
-     <TUNNEL_ALIAS>`, summarize the candidates, then AskUserQuestion "Which project on your laptop?"
-     Codex structured input gets only the best 2-3 paths plus Other/free-form; Claude/chat may show
-     a longer list. → pass `--project-dir '<LAPTOP_DIR>'`.
-   - If the tunnel is NOT up yet (you just built it in Step 1, can't reach the laptop): still ask the
-     user to type the laptop project path explicitly. You cannot validate/list it yet, but it is the
-     required confirmation. → pass `--project-dir '<LAPTOP_DIR>'`.
-
-`laptop-setup.sh` validates `--project-dir` on the laptop. If the path is missing or not a
-directory, it asks whether to create it when reasonable, then loops until the user picks a valid
-directory, creates one, or aborts. If an older agent omits `--project-dir`, the script still falls
-back to its on-laptop prompt for backward compatibility; this skill should pass it.
-
-### 1c. Emit the laptop command — then you are done
+## Step 3 — Emit the laptop command — then you are done
 
 Print the following **exactly as shown** (short lines, `\`-continued, ≲70 chars each):
 
@@ -169,7 +156,7 @@ ports, rewrites the laptop `RemoteForward`, rewrites the box-side `<ALIAS>` with
 and continues on the first free port.
 (`mktemp` avoids a predictable, world-writable `/tmp/rh.sh`; the subshell `trap` removes the temp dir
 without masking the fetch/setup exit code.)
-- `[--remote-mountpoint '<BOX_MP>']` = include only when **1b.5** chose an explicit box mountpoint
+- `[--remote-mountpoint '<BOX_MP>']` = include only when **Step 1** chose an explicit box mountpoint
   (omit it for the `~/work/<name>` default). `--project-dir` should always be included. Both values
   must be user-confirmed, not guesses.
 - Every `<..._Q>` placeholder is a shell word quoted with `sq()` semantics, not ad-hoc quotes. Example:
@@ -208,10 +195,12 @@ or wait for further confirmation from this session.
 
 ### Emit-only variant (tunnel already up from preflight)
 
-If preflight returned `PREFLIGHT=ok`, the tunnel exists but the user may want to remount or
-start a new session. In that case still emit the same command (laptop-setup.sh is idempotent —
-Phase 1 will be fast, it picks up the project dir and launches the agent). Use `TUNNEL_ALIAS`
-as `<ALIAS>` and derive `<CONNECT>` / `<HOST>` from the existing alias or re-ask the user.
+If preflight returned `PREFLIGHT=ok`, the tunnel exists but the user may want to remount or start a
+new session. Still emit the same command (laptop-setup.sh is idempotent — Phase 1 is fast, it picks
+up the project dir and launches the agent). Use `TUNNEL_ALIAS` as `<ALIAS>` and the live `TUNNEL_PORT`
+as `<PORT>`. Pre-fill `<CONNECT>` / `<HOST>` from `LAST_VIA` (cache) if present — only re-ask when
+there's no cached connect string. Still run the `session-cache.sh put` from Step 2 before emitting so
+the cache stays current.
 
 ### Troubleshooting (if the user reports problems after running the command)
 

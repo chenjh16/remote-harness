@@ -35,7 +35,15 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
   from `~/.ssh/config` non-loopback aliases, known_hosts, and recent history. Prints `ssh <target>`
   lines. The user's own answer is authoritative.
 - `"$RH/scripts/list-projects.sh"` — list candidate project dirs locally, or on a remote via
-  `--via '<ssh-args|alias>'` (used to enumerate the laptop's or server's projects). `PROJECT\t<path>…`.
+  `--via '<ssh-args|alias>'`. **Opt-in only** — the default flow does NOT scan for the user's project
+  (slow + misleading; see SKILL.md "ask, don't fish"); the user types the path. Use this only if the
+  user explicitly asks for help finding it. `PROJECT\t<path>…`.
+- `"$RH/scripts/session-cache.sh"` — remember a namespace's last connection choices on THIS machine so
+  a re-run recommends them instantly (zero remote discovery). `put <key> KEY=VALUE…` stores;
+  `get <key>` prints the stored `KEY=VALUE` lines (none if absent). Per-namespace file under
+  `$RH_HOME/.sessions-cache/<key>.env` (mode 600). Key by the real-user `RU` (reverse) or the server
+  token (forward); the flows cache `LAST_PROJECT_DIR`/`LAST_VIA`/`LAST_LOGIN_USER`/`LAST_MOUNTPOINT`/
+  `LAST_LAUNCH` and pre-fill the next run's questions from them.
 - `"$RH/scripts/mount-project.sh"` — sshfs-mount `<alias>:<remote-path>` onto a LOCAL mountpoint
   (direction-agnostic). Refuses a non-empty target (`--force` to override); revalidates/remounts a
   stale mount; `--unmount` to detach. Emits

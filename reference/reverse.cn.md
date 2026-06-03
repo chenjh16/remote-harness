@@ -16,94 +16,71 @@ this box:  ssh <BOX_ALIAS>          → 127.0.0.1:<PORT> → (tunnel) → laptop
 
 笔记本只需在配置中加入 `RemoteForward` 后重新连接即可。`BOX_ALIAS`（例如 `my-mac`）是服务器用来访问笔记本的别名。
 
-## Step 0 — 先识别真实用户（命名空间），再预检
+## 速度原则：问，别钓
 
-一个服务器账号可能被**多个人共享**，每个人都跑 remote-harness 连回各自的笔记本。为了避免他们的反向隧道相互冲突——更糟的是把 `ssh <alias>` 串到**别人的**笔记本上——我们按**真实用户**给隧道（ssh 别名 + 反向端口）做命名空间隔离。所以先识别这个命名空间，再针对它做预检。
+这个流程必须**快** —— 问几个问题，笔记本命令就好了。两条硬规则：
 
-### 0a. 确认命名空间（`RU`）—— 询问，不要推断
+- **绝不通过远程搜索去发现用户的项目。** 不要跑 `list-projects.sh --via`，也不要 `ssh <alias> 'find …'`/`ls` 去找笔记本上的项目。它慢，而且经常**带偏** —— 项目可能在一个和你猜测**不同的笔记本账户**下（比如隧道是 `chenjh` 的，项目却在 `/Users/substance/…`）。让用户输入路径；`laptop-setup.sh` 会在笔记本端校验并在出错时重提示。
+- **推荐只能来自便宜的本地/缓存信号**，并永远提供"自己输入"：按命名空间的缓存（`session-cache.sh`）、本机 `~/.ssh/config`、cwd、以及 `connect-guesses.sh`。本地**只探测一次**，然后把问题合并提问。
 
-```bash
-"$RH/scripts/detect.sh"   # REALUSER_GUESS/SOURCE/CANDIDATES、SUGGESTED_PORT（按 RU 稳定哈希）、
-                          # LAPTOP_USER_GUESS、DEFAULT_IDENTITY、SSHD_TCP_FORWARDING
-```
+一个服务器账号也可能被**多个人共享**，各自连回自己的笔记本——所以隧道（ssh 别名 + 反向端口）按**真实用户**（`RU`）做命名空间隔离；确认 `RU` 是下面合并提问中的一项。
 
-`REALUSER_GUESS` 是对"你在这个账号上是谁"的尽力猜测，按优先级取自：本次会话登录所用公钥的 comment（需要 sshd `ExposeAuthInfo yes`，默认关闭）、启动目录中 `~/<名字>/…` 的第一层路径名（那个软性的按人约定）、或 authorized_keys 里的 comment。`REALUSER_SOURCE` 说明命中的是哪一个；`REALUSER_CANDIDATES` 列出其余候选。
-
-**向用户提问（确认，不要推断）：** "在这个（可能共享的）账号上，用什么名字给你的隧道做命名空间？"——预填 `REALUSER_GUESS`，并提供 `REALUSER_CANDIDATES` + 其他/自由输入。把答案记作 **`RU`**。你的服务器端别名就是 **`<RU>-mac`**；反向端口由 `RU` 稳定推导。若 `REALUSER_GUESS` 为空（例如你直接从 `$HOME` 启动，或目录是 `work`/`src` 这类通用名），就必须直接询问——没有安全的默认值。
-
-### 0b. 针对你的命名空间做预检
+## Step 0 — 一次本地探测（单个 Bash 调用；每个脚本只跑一遍）
 
 ```bash
-"$RH/scripts/preflight.sh" --alias <RU>-mac --no-list   # --no-list: 将项目扫描推迟到第 1b.5 步
+RH="${RH_HOME:-$HOME/.remote-harness}"
+"$RH/scripts/detect.sh"                                 # REALUSER_GUESS/SOURCE/CANDIDATES、SUGGESTED_PORT、DEFAULT_IDENTITY、SSHD_TCP_FORWARDING
+"$RH/scripts/connect-guesses.sh"                        # 笔记本→盒子的候选 `ssh …` 串
+"$RH/scripts/session-cache.sh" get "<REALUSER_GUESS>"   # LAST_PROJECT_DIR/LAST_VIA/LAST_LOGIN_USER/LAST_MOUNTPOINT（首次为空）
+"$RH/scripts/preflight.sh" --alias "<REALUSER_GUESS>-mac" --no-list   # 隧道通了吗？+ sshfs/FUSE + PROJECT_DIR/PROJECT_DIR_EMPTY（cwd）
 ```
 
-读取 `PREFLIGHT` 的值：
+把四个放进**一个** Bash 块跑，解析 stdout（`KEY=VALUE`）。别为了"看 stderr"把脚本跑两遍——stderr 只是人工提示。`<REALUSER_GUESS>` 来自 `detect.sh`；若它**为空**，本次探测就去掉 `session-cache get` 和 `preflight --alias` 两行（还没有命名空间），先在 Step 1 确认 `RU`，再跑一次 `preflight --alias <RU>-mac`。读取：
 
-- **`ok`** → 你的命名空间隧道（`<RU>-mac`）已经连回你的笔记本（`TUNNEL_ALIAS`、`TUNNEL_PORT`、
-  `LAPTOP_HOSTNAME` 均已就绪）。无需新建 — 立即输出笔记本命令（参见"仅输出"变体一节）。这同时是
-  **同一用户、另一个项目**的路径：一条隧道+端口可承载任意多个 sshfs 挂载，所以第二个项目只是在现有隧道上重新挂载——不需要新端口。
-- **`blocked`** — 处理 `BLOCKED_STEP`：
-  - `tunnel` → 你的 `<RU>-mac` 隧道尚未建立 → 进入 **Step 1**（见下文）。
-  - `sshfs` → sshfs/FUSE 缺失：显示 `REMEDY`，提问用户（"已安装？ ✅/⚠️"），
-    ✅ 后重新执行；⚠️ 后读取问题并协助解决。循环直至问题解决。
+- `SSHD_TCP_FORWARDING=restricted-needs-attention` → 提示盒子 sshd 阻止反向转发（`AllowTcpForwarding no|local`）；用户需设 `yes`/`remote` 并重启 sshd。
+- `PREFLIGHT=ok` → 你的 `<RU>-mac` 隧道已连回你的笔记本（`TUNNEL_ALIAS`、`TUNNEL_PORT`、`LAPTOP_HOSTNAME`/`LAPTOP_USER`）。这是**复用**路径（含同一用户/另一个项目——一条隧道承载任意多挂载）：无需新建隧道，确认几个值后走"仅输出"。
+- `PREFLIGHT=blocked` + `BLOCKED_STEP=sshfs` → 显示 `REMEDY`，提问（"已安装？ ✅/⚠️"），✅ 后重跑。`BLOCKED_STEP=tunnel` → 在 Step 2 建。
+- 出现 `LAST_*` → 该命名空间有过历史会话；把它们当作下面的**预填默认值**，重复运行近乎一键。
 
-传入 `--alias <RU>-mac` 让预检只考虑你自己的隧道——在共享账号上，它绝不能复用别人的回环别名而把你挂到错误的笔记本上。
+（`--alias <RU>-mac` 让预检只考虑你自己的隧道——在共享账号上绝不能复用别人的回环别名而挂到错误的笔记本。挂载点必须为空，因为 sshfs 会遮蔽已有文件。）
 
-`PROJECT_DIR` / `PROJECT_DIR_EMPTY` 用于 Step 1b.5 中**服务器挂载点**的决策（不影响流程是否继续）。挂载点必须为空目录，因为 sshfs 会遮蔽其中的已有文件。
+## Step 1 — 确认方向，然后一轮合并提问
 
-## Step 1 — 搭建隧道并移交给笔记本
+先确认**方向**（检测只预选：`SSH_CONNECTION` 已设 / `ON_REMOTE=1` ⇒ 反向）。然后把反向的几个决策**一起**问（AskUserQuestion 最多 4 个）——每项都用 Step 0 的结果预填，每项都带自由输入"其他"。重复运行（命中缓存）时大多是一键确认。
 
-### 1a. 配置服务器端（detect 已在 Step 0a 跑过）
+1. **命名空间 `RU`** —— 预填 `REALUSER_GUESS`；提供 `REALUSER_CANDIDATES` + 其他。盒子别名是 `<RU>-mac`，反向端口由 `RU` 稳定哈希。（猜测为空 ⇒ 无安全默认，直接问。）
+2. **笔记本项目目录** —— 要开发的代码库。有缓存就预填 `LAST_PROJECT_DIR`；否则让用户**输入绝对路径**（如 `/Users/you/proj`）。**绝不扫描、绝不用搜索去找。** → `--project-dir`。
+3. **盒子挂载点** —— 在本机的挂载位置，也是代理启动目录。**仅当为空**才推荐 cwd：`PROJECT_DIR_EMPTY=1` ⇒ 预选"使用当前目录：`<PROJECT_DIR>`" → 传 `--remote-mountpoint '<PROJECT_DIR>'`。否则推荐自动 `~/work/<basename>`（**省略** `--remote-mountpoint`），或让用户输入另一个空目录。
+4. **连接串** —— 笔记本怎么 SSH 进本机（隧道据此反拨）。有缓存预填 `LAST_VIA`，否则用 `connect-guesses.sh` 最佳候选；+ 其他（如 `-p 2222 you@203.0.113.20`，或一个 `~/.ssh/config` 别名）。提取 `CONNECT` = 去掉前导 `ssh` 的参数，`HOST` = 主机/别名。支持的原始形式：主机/别名、`user@host`、`-p`/`-l`/`-i`、`-J`/`-o ProxyJump=…`（无需 shell 引号）；遇 `ProxyCommand`/`-F`/带空格引号，让用户写进 `~/.ssh/config` 的 Host 别名再传。
 
-若 `SSHD_TCP_FORWARDING=restricted-needs-attention`：提示该服务器的 sshd 阻止了反向转发（`AllowTcpForwarding no|local`）——用户需将其设为 `yes`/`remote` 并重启 sshd。
+**笔记本登录用户**（`LOGIN_USER`，用于把项目 sshfs 挂回来）—— 能推导就**不要**单独开一个问题：`LAST_LOGIN_USER`（缓存）→ 否则取已确认**项目目录**的 `/Users/<x>/` 或 `/home/<x>/` 第一层 → 否则连接串里的用户 → 否则 `LAPTOP_USER_GUESS`。只有当它们**冲突**时才提问——比如项目在 `/Users/substance/…` 但连接用户是 `chenjh`，这种不一致会导致挂载失败（登录用户读不了别人的家目录），出命令前要点出来让用户对齐。
 
-若 `DEFAULT_IDENTITY` 返回为**空**（这台机器还没有 SSH 密钥），请加上 `--gen-key`，让 `setup-tunnel.sh` 生成一个 ed25519 密钥并输出非空的 `PUBKEY`。否则隧道没有可授权的密钥，后续 Phase 5 登录会卡在密码提示。
+`laptop-setup.sh` 会在笔记本端校验 `--project-dir` 并在缺失/读不到时循环提示——所以输入的路径是安全的，你不必从盒子端去验证它。
+
+## Step 2 — 配置盒子端，然后记住选择
+
+若 `PREFLIGHT=ok` 且已确认的项目 + `LOGIN_USER` 和现有隧道一致，跳到"仅输出"变体。否则配置盒子端（`DEFAULT_IDENTITY` 为空时加 `--gen-key`——没有盒子密钥，后续 Phase 5 登录会卡密码）：
 
 ```bash
 "$RH/scripts/setup-tunnel.sh" \
   --alias     <RU>-mac \
   --namespace <RU> \                # 由 RU 稳定推导反向端口；省略 --port
-  --user      <LAPTOP_USER_GUESS> \ # 笔记本登录用户名（与 RU 不同）
+  --user      <LOGIN_USER> \        # 推导/确认出的笔记本登录用户
   [--identity <DEFAULT_IDENTITY>] \
-  [--gen-key]   # 当 DEFAULT_IDENTITY 为空（机器上没有现成密钥）时加上
+  [--gen-key]
 ```
 
-传入 `--namespace <RU>` 并**省略 `--port`**，让端口跟随*已确认*的 `RU`（而不是确认前那个从猜测哈希出来的 `SUGGESTED_PORT`）。`setup-tunnel.sh` 会把 `RU` 哈希到临时端口下界以下的一个稳定 `.22` 槽位，再探测空闲端口。从输出中提取：`ALIAS`（`<RU>-mac`）、`PORT`（推导出的稳定端口——笔记本命令里用它）、`PUBKEY`。若 `PUBKEY` 为空，请加 `--gen-key` 重跑。
+提取 `ALIAS`（`<RU>-mac`）、`PORT`（稳定端口——笔记本命令里用它）、`PUBKEY`（为空则加 `--gen-key` 重跑）。
 
-### 1b. 询问用户如何连接到本服务器
+然后**记住**这些选择，让该命名空间下次运行瞬间预填——**两条路径**（新建和仅输出）都要在出命令前跑：
 
 ```bash
-"$RH/scripts/connect-guesses.sh"   # candidate ssh commands (user+public/LAN IP)
+"$RH/scripts/session-cache.sh" put <RU> \
+  "LAST_PROJECT_DIR=<LAPTOP_DIR>" "LAST_VIA=<CONNECT>" "LAST_LOGIN_USER=<LOGIN_USER>" \
+  "LAST_MOUNTPOINT=<BOX_MP>" "LAST_LAUNCH=<LAUNCH>"
 ```
 
-**向用户提问**："你在笔记本上怎么 ssh 进这台服务器？"
-- Claude/聊天可以直接展示有用候选。Codex 结构化输入只能放入最佳 2-3 个候选（例如
-  `ssh you@203.0.113.10`）；客户端提供的"其他"/自由输入用于填写真实命令。
-- "其他"/自由输入示例：`ssh -p 2222 you@203.0.113.20`，或一个普通 SSH config 别名。
-
-从用户回答中提取：
-- `CONNECT` = ssh 的*参数部分*（若带有前导 `ssh` 则去掉），
-  例如 `-p 2222 you@203.0.113.20`
-- `HOST` = 主机/别名部分，例如 `203.0.113.20` 或 `my-box`
-- 支持的原始 `CONNECT` 形式包括主机/别名、可选的 `user@host`、`-p`/`-l`/`-i`，以及不需要
-  shell 引号的 `-J` / `-o ProxyJump=...`。若需要复杂 SSH 行为（`ProxyCommand`、`-F`、带空格的引号路径、本地转发等），请让用户先写进 `~/.ssh/config` 的 `Host` 别名，然后提供该别名。
-
-### 1b.5 确认两个目录（必须 — 询问用户，不得假设）
-
-输出命令前，先向用户确认（提问用户；检测到的值仅为默认建议，不是最终决定）：
-
-1. **服务器挂载点** — 项目在本服务器上的挂载位置，也是代理的启动目录。选项：
-   - "使用当前目录：`<PROJECT_DIR>`" — 仅当目录为空（`PROJECT_DIR_EMPTY=1`）时有效；为空时预先选中此项。→ 传入 `--remote-mountpoint '<PROJECT_DIR>'`。
-   - "自动创建 `~/work/<project-name>`（推荐）" — 当前目录非空时预先选中此项。→ **省略** `--remote-mountpoint`（由 laptop-setup 推导）。
-   - 其他（用户指定的另一个空目录） → 传入 `--remote-mountpoint '<that dir>'`。
-2. **笔记本项目目录** — 要开发的代码库：
-   - 若隧道已建立（`PREFLIGHT=ok`）：执行 `"$RH/scripts/list-projects.sh" --via
-     <TUNNEL_ALIAS>`，概述候选项，然后提问用户"你笔记本上要开发哪个项目？"。Codex 结构化输入只放最佳 2-3 个路径并保留"其他"/自由输入；Claude/聊天可以展示更长列表。→ 传入 `--project-dir '<LAPTOP_DIR>'`。
-   - 若隧道**尚未建立**（你刚在 Step 1 中搭建，还无法访问笔记本）：仍然要求用户手动输入笔记本项目路径。此时无法验证/列出路径，但这仍是必须确认项。→ 传入 `--project-dir '<LAPTOP_DIR>'`。
-
-`laptop-setup.sh` 会在笔记本上验证 `--project-dir`。如果路径不存在或不是目录，它会在合理时询问是否创建，并循环直到用户选择有效目录、成功创建目录或主动中止。若旧版代理省略 `--project-dir`，脚本仍保留笔记本侧交互提示作为兼容兜底；但本 skill 应该传入该参数。
-
-### 1c. 输出笔记本命令 — 完成
+## Step 3 — 输出笔记本命令 — 完成
 
 按以下格式**原样输出**（短行，`\` 续行，每行不超过 70 个字符）：
 
@@ -126,7 +103,7 @@ this box:  ssh <BOX_ALIAS>          → 127.0.0.1:<PORT> → (tunnel) → laptop
 （两次 fetch 必须带 `ClearAllForwardings=yes`：用户的 SSH alias 里可能已经有上次写入的 `RemoteForward`，同端口的陈旧/现有隧道不应该阻止脚本下载。）
 Phase 2 中，`laptop-setup.sh` 会确认 `<PORT>` 上的现有监听是否真的连回这台笔记本（hostname + user）。若该端口被另一个或陈旧的隧道占用，它会扫描后续 200 个端口，改写笔记本侧 `RemoteForward`，用 `setup-tunnel.sh` 改写服务器侧 `<ALIAS>`，然后使用第一个空闲端口继续。
 （`mktemp` 避免使用可预测的全局可写路径 `/tmp/rh.sh`；子 shell 的 `trap` 会清理临时目录且不掩盖 fetch/setup 的退出码。）
-- `[--remote-mountpoint '<BOX_MP>']` = 仅在 **1b.5** 中决定包含时才加入（选择 `~/work/<name>` 默认值时省略）。`--project-dir` 应始终传入。两者均须为用户确认的值，不得使用推测值。
+- `[--remote-mountpoint '<BOX_MP>']` = 仅在 **Step 1** 中决定使用显式挂载点时才加入（选择 `~/work/<name>` 默认值时省略）。`--project-dir` 应始终传入。两者均须为用户确认的值，不得使用推测值。
 - 每个 `<..._Q>` 占位符都必须使用 `sq()` 语义作为 shell 单词引用，而不是手写简单引号。例如：
   `/Users/O'Neil/app` 应生成 `'/Users/O'\''Neil/app'`。这适用于 `--via`、`--host`、`--box-alias`、`--remote-mountpoint` 和 `--project-dir`。
 - `[--yolo]` 仅在用户要求跳过审批时添加。
@@ -156,7 +133,7 @@ Phase 2 中，`laptop-setup.sh` 会确认 `<PORT>` 上的现有监听是否真�
 
 ### 仅输出变体（预检时隧道已建立）
 
-若预检返回 `PREFLIGHT=ok`，隧道已存在，但用户可能希望重新挂载或开启新会话。此时仍应输出相同的命令（`laptop-setup.sh` 是幂等的 —— 第一阶段会很快完成，直接读取项目目录并启动代理）。以 `TUNNEL_ALIAS` 作为 `<ALIAS>`，并从现有别名推导 `<CONNECT>` / `<HOST>`，或重新询问用户。
+若预检返回 `PREFLIGHT=ok`，隧道已存在，但用户可能希望重新挂载或开启新会话。此时仍输出相同的命令（`laptop-setup.sh` 是幂等的 —— 第一阶段会很快完成，直接读取项目目录并启动代理）。以 `TUNNEL_ALIAS` 作为 `<ALIAS>`、现有的 `TUNNEL_PORT` 作为 `<PORT>`。`<CONNECT>` / `<HOST>` 有缓存的 `LAST_VIA` 就预填——只有在没有缓存连接串时才重新询问。出命令前仍要跑 Step 2 里的 `session-cache.sh put` 以保持缓存最新。
 
 ### 故障排查（用户运行命令后报告问题）
 

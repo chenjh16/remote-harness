@@ -113,7 +113,8 @@ results reliably without brittle natural-language scraping.
 | `server-guesses.sh` | forward | guess outbound ssh targets (the server) | `ssh <target>` lines |
 | `check-tunnel.sh` | reverse | verify listener + a real login through the tunnel | `SSH=up\|down`, `LAPTOP_HOSTNAME/USER` |
 | `mount-project.sh` | both | sshfs mount/unmount onto a local path | `STATUS=mounted\|already-mounted\|need-sshfs\|not-empty\|failed\|unmounted` |
-| `list-projects.sh` | both | enumerate candidate project dirs (locally or `--via`) | `PROJECT\t<path>\tgit:<branch>` |
+| `list-projects.sh` | both | enumerate candidate project dirs (**opt-in only** — the flow asks the user to type the path) | `PROJECT\t<path>\tgit:<branch>` |
+| `session-cache.sh` | both | remember a namespace's last connection choices for instant re-runs | `LAST_PROJECT_DIR`/`LAST_VIA`/`LAST_LOGIN_USER`/… |
 | `inject-rule.sh` | both | per-session "build on P" rule + per-agent launch flags | `RH_STATUS`, `RH_LAUNCH_ENV`, `RH_LAUNCH_FLAGS` |
 
 ### Layer 4 — the shared library
@@ -239,6 +240,11 @@ These hold across the whole codebase and are enforced in review/tests:
    `set -uo pipefail` (not `-e`) on probes that must keep emitting.
 6. **`KEY=VALUE` on stdout, human notes on stderr** — the parsing contract.
 7. **Bilingual docs** — every `*.md` ships a `*.cn.md` (except `README.md`, `CLAUDE.md`).
+8. **Ask, don't fish; minimal questions.** Probe locally **once** and batch the decisions; **never
+   remote-search to discover the user's project** (slow, and it misleads when the project lives under
+   a different remote account than detection guesses). Recommend only from cheap local/cached signals
+   (`session-cache.sh`, `~/.ssh/config`, the cwd, the connect/server guesses) and always offer typed
+   input — the setup script validates the typed path and re-prompts.
 
 ## 9. Lifecycle, idempotency & cleanup
 
@@ -283,7 +289,7 @@ remote-harness/
 │   ├── server-guesses.sh        # forward probe
 │   ├── laptop-setup.sh          # layer 2: reverse orchestrator (standalone)
 │   ├── local-setup.sh           # layer 2: forward orchestrator
-│   └── mount-project.sh inject-rule.sh list-projects.sh   # shared by both
+│   └── mount-project.sh inject-rule.sh list-projects.sh session-cache.sh   # shared by both
 ├── adapters/{codex,opencode}.md # agent entry notes (set --launch)
 ├── manage.sh                    # install / --dev / --uninstall
 ├── docs/design.md               # this document (+ .cn.md)

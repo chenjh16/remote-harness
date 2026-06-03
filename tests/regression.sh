@@ -369,6 +369,20 @@ if HOME="$st_home3" bash "$ROOT/scripts/setup-tunnel.sh" --alias x-mac --user x 
 fi
 assert_grep "$tmp/st-noport.err" "need --port PORT or --namespace RU" "setup-tunnel requires port or namespace"
 
+# --- session-cache.sh: per-namespace connection memory round-trips ----------
+sc_rh="$tmp/sc-home/.remote-harness"
+RH_HOME="$sc_rh" bash "$ROOT/scripts/session-cache.sh" put 'chenjh@mbp.local' \
+  'LAST_PROJECT_DIR=/Users/substance/vibe/codex/OmniInput' \
+  'LAST_VIA=-p 2222 bytepilot@42.121.2.119' \
+  'LAST_LOGIN_USER=substance' >/dev/null
+sc_out="$(RH_HOME="$sc_rh" bash "$ROOT/scripts/session-cache.sh" get 'chenjh@mbp.local')"
+printf '%s\n' "$sc_out" | grep -qxF 'LAST_PROJECT_DIR=/Users/substance/vibe/codex/OmniInput' || fail "session-cache: project round-trip"
+printf '%s\n' "$sc_out" | grep -qxF 'LAST_VIA=-p 2222 bytepilot@42.121.2.119' || fail "session-cache: via with spaces"
+printf '%s\n' "$sc_out" | grep -qxF 'LAST_LOGIN_USER=substance' || fail "session-cache: login user"
+[ -z "$(RH_HOME="$sc_rh" bash "$ROOT/scripts/session-cache.sh" get 'nobody')" ] || fail "session-cache: absent key not empty"
+RH_HOME="$sc_rh" bash "$ROOT/scripts/session-cache.sh" put 'k' 'NOEQUALS' 'GOOD=1' >/dev/null
+[ "$(RH_HOME="$sc_rh" bash "$ROOT/scripts/session-cache.sh" get 'k')" = 'GOOD=1' ] || fail "session-cache: malformed pair not filtered"
+
 while IFS= read -r f; do
   [ -f "${f%.md}.cn.md" ] || fail "missing Chinese doc counterpart for $f"
 done < <(git -C "$ROOT" ls-files --cached --others --exclude-standard '*.md' | grep -v '^README.md$' | grep -v '^CLAUDE.md$' | grep -v '\.cn\.md$')

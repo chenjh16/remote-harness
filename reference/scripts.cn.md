@@ -30,8 +30,13 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
 - `"$RH/scripts/check-tunnel.sh"` — （反向）验证监听器并通过隧道进行真实 ssh 登录测试（`--port <PORT>` 检查指定的转发端口）。
 - `"$RH/scripts/server-guesses.sh"` — （正向）从 `~/.ssh/config` 非回环别名、known_hosts 及近期历史中
   推测出站 ssh 目标（项目服务器），输出 `ssh <target>` 格式的行。用户自行填写的答案具有最终权威性。
-- `"$RH/scripts/list-projects.sh"` — 列出本地候选项目目录，或通过
-  `--via '<ssh-args|alias>'` 在远端列出（用于枚举笔记本或服务器上的项目）。输出格式：`PROJECT\t<path>…`。
+- `"$RH/scripts/list-projects.sh"` — 列出本地候选项目目录，或通过 `--via '<ssh-args|alias>'` 在远端列出。
+  **仅按需使用** —— 默认流程**不**扫描用户的项目（慢且带偏，见 SKILL.md "问，别钓"）；让用户输入路径。
+  只有当用户明确要求"帮我找"时才用它。输出格式：`PROJECT\t<path>…`。
+- `"$RH/scripts/session-cache.sh"` — 在本机记住某命名空间上次的连接选择，让重复运行瞬间推荐（零远程发现）。
+  `put <key> KEY=VALUE…` 写入；`get <key>` 打印存的 `KEY=VALUE` 行（无则空）。按命名空间存于
+  `$RH_HOME/.sessions-cache/<key>.env`（权限 600）。键用真实用户 `RU`（反向）或服务器标识（正向）；
+  流程会缓存 `LAST_PROJECT_DIR`/`LAST_VIA`/`LAST_LOGIN_USER`/`LAST_MOUNTPOINT`/`LAST_LAUNCH`，并据此预填下次提问。
 - `"$RH/scripts/mount-project.sh"` — 通过 sshfs 将 `<alias>:<remote-path>` 挂载到本地挂载点
   （方向无关）。拒绝挂载非空目标（`--force` 可覆盖）；对陈旧挂载重新验证/重新挂载；`--unmount` 卸载。
   输出 `STATUS=mounted|already-mounted|need-sshfs|not-empty|failed|unmounted`。
