@@ -78,10 +78,10 @@ one-click confirmations.
 2. **Laptop project dir** — the codebase to develop. Pre-fill `LAST_PROJECT_DIR` if cached; otherwise
    the user **types the absolute path** (e.g. `/Users/you/proj`). **Never scanned, never hunted by
    search.** → `--project-dir`.
-3. **Box mountpoint** — where it mounts on this box and the agent launches. Recommend the cwd **only
-   when empty**: `PROJECT_DIR_EMPTY=1` ⇒ pre-select "Here: `<PROJECT_DIR>`" → pass
-   `--remote-mountpoint '<PROJECT_DIR>'`. Otherwise recommend the auto `~/work/<basename>` (OMIT
-   `--remote-mountpoint`) or let the user type a different EMPTY dir.
+3. **Box mountpoint** — where it mounts on this box and the agent launches. Pre-fill `LAST_MOUNTPOINT`
+   if cached and still empty; else recommend the cwd **only when empty** (`PROJECT_DIR_EMPTY=1` ⇒
+   pre-select "Here: `<PROJECT_DIR>`" → pass `--remote-mountpoint '<PROJECT_DIR>'`); else recommend the
+   auto `~/work/<basename>` (OMIT `--remote-mountpoint`) or let the user type a different EMPTY dir.
 4. **Connect string** — how the laptop SSHes to this box (the tunnel dials back this way). Pre-fill
    `LAST_VIA` if cached, else the best `connect-guesses.sh` candidate; + Other (e.g.
    `-p 2222 you@203.0.113.20`, or a `~/.ssh/config` alias). Extract `CONNECT` = the ssh args without
@@ -92,9 +92,13 @@ one-click confirmations.
 **Laptop login user** (`LOGIN_USER`, used to sshfs the project back) — do NOT add a separate question
 when you can derive it: `LAST_LOGIN_USER` (cache) → else the `/Users/<x>/` or `/home/<x>/` first
 component of the confirmed **project dir** → else the user in the connect string → else
-`LAPTOP_USER_GUESS`. Only AskUserQuestion when these **disagree** — e.g. the project is under
-`/Users/substance/…` but the connect user is `chenjh`; that mismatch would break the mount (the login
-user can't read another user's home), so surface it and let the user reconcile before emitting.
+`LAPTOP_USER_GUESS`. This derivation runs **after the batch returns** (it needs the confirmed project
+dir + connect string), so it can cost **one follow-up question** in two cases — budget for it, don't
+skip it: (a) the signals **disagree**, e.g. the project is under `/Users/substance/…` but the connect
+user is `chenjh` — that mismatch breaks the mount (the login user can't read another user's home), so
+surface it; (b) the derivation is **empty** (no `/Users|/home/<x>/` prefix, a bare-alias connect, and
+no `LAPTOP_USER_GUESS`) — `setup-tunnel.sh` requires `--user`, so never emit with an empty
+`LOGIN_USER`: ask for it.
 
 `laptop-setup.sh` validates `--project-dir` on the laptop and loops/prompts if it's missing or
 unreadable — so a typed path is safe; you don't need to validate it from the box.
@@ -217,12 +221,12 @@ the cache stays current.
   port. Current `laptop-setup.sh` tries the next free port automatically and updates both sides. If
   it cannot find/configure a free port, close that SSH session, or if it is a multiplexed master run
   `ssh -O exit <host>`, then rerun.
-- **Several people sharing one box account** → each confirms a distinct namespace `RU` in Step 0a, so
+- **Several people sharing one box account** → each confirms a distinct namespace `RU` in Step 1, so
   each gets their own `<RU>-mac` alias and a reverse port hashed from `RU` — tunnels stay separate and
   `ssh <RU>-mac` always reaches that person's own laptop. If two people accidentally confirm the SAME
-  `RU` (e.g. both accepted a generic guess), their alias/port collide; re-run Step 0a and give
-  distinct namespaces. The box-side `~/.ssh/config` edit is `flock`-serialized so concurrent setups
-  don't clobber each other's managed block.
+  `RU` (e.g. both accepted a generic guess), their alias/port collide; re-run and give distinct
+  namespaces. The box-side `~/.ssh/config` edit is written atomically and `flock`-serialized so
+  concurrent setups don't clobber each other's managed block.
 - **Mount fails** with `STATUS=failed` → tunnel may not be up yet; wait a few seconds and retry
   the script. Or check `BOX_ALIAS` is the right alias on the box (`ssh <ALIAS> hostname` from box).
 - **sshfs not installed on box** → the script offers to retry after the user installs it (the

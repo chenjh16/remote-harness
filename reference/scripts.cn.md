@@ -14,7 +14,7 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
   `ERROR`/`REMEDY` + `DIRECTION`。反向模式（默认）：检查隧道及本地 sshfs/FUSE。传入
   `--alias <RU>-mac` 让它只复用该真实用户的命名空间隧道（共享账号上若不传，预检会扫描所有回环别名，
   可能误连到别人的隧道）。正向模式：`--direction forward [--server '<via>']` 检查本地 sshfs/FUSE
-  （及服务器可达性）并列出服务器上的项目。请首先运行此脚本。
+  （及服务器可达性）。它**不扫描**用户的项目（流程让用户输入路径；旧的 `--no-list` 现在是 no-op）。请首先运行此脚本。
 - `"$RH/scripts/detect.sh"` — 只读探测：`REALUSER_GUESS`/`REALUSER_SOURCE`
   （`authkey|cwd|authorized_keys|none`）/`REALUSER_CANDIDATES`（共享账号上按真实用户的命名空间猜测——
   使用前先确认）、`SUGGESTED_PORT`（由 `REALUSER_GUESS` 哈希到稳定 `.22` 槽位，避免不同用户撞端口；

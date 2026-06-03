@@ -50,10 +50,10 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
 
 1. **命名空间 `RU`** —— 预填 `REALUSER_GUESS`；提供 `REALUSER_CANDIDATES` + 其他。盒子别名是 `<RU>-mac`，反向端口由 `RU` 稳定哈希。（猜测为空 ⇒ 无安全默认，直接问。）
 2. **笔记本项目目录** —— 要开发的代码库。有缓存就预填 `LAST_PROJECT_DIR`；否则让用户**输入绝对路径**（如 `/Users/you/proj`）。**绝不扫描、绝不用搜索去找。** → `--project-dir`。
-3. **盒子挂载点** —— 在本机的挂载位置，也是代理启动目录。**仅当为空**才推荐 cwd：`PROJECT_DIR_EMPTY=1` ⇒ 预选"使用当前目录：`<PROJECT_DIR>`" → 传 `--remote-mountpoint '<PROJECT_DIR>'`。否则推荐自动 `~/work/<basename>`（**省略** `--remote-mountpoint`），或让用户输入另一个空目录。
+3. **盒子挂载点** —— 在本机的挂载位置，也是代理启动目录。有缓存且仍为空就预填 `LAST_MOUNTPOINT`；否则**仅当为空**才推荐 cwd（`PROJECT_DIR_EMPTY=1` ⇒ 预选"使用当前目录：`<PROJECT_DIR>`" → 传 `--remote-mountpoint '<PROJECT_DIR>'`）；否则推荐自动 `~/work/<basename>`（**省略** `--remote-mountpoint`），或让用户输入另一个空目录。
 4. **连接串** —— 笔记本怎么 SSH 进本机（隧道据此反拨）。有缓存预填 `LAST_VIA`，否则用 `connect-guesses.sh` 最佳候选；+ 其他（如 `-p 2222 you@203.0.113.20`，或一个 `~/.ssh/config` 别名）。提取 `CONNECT` = 去掉前导 `ssh` 的参数，`HOST` = 主机/别名。支持的原始形式：主机/别名、`user@host`、`-p`/`-l`/`-i`、`-J`/`-o ProxyJump=…`（无需 shell 引号）；遇 `ProxyCommand`/`-F`/带空格引号，让用户写进 `~/.ssh/config` 的 Host 别名再传。
 
-**笔记本登录用户**（`LOGIN_USER`，用于把项目 sshfs 挂回来）—— 能推导就**不要**单独开一个问题：`LAST_LOGIN_USER`（缓存）→ 否则取已确认**项目目录**的 `/Users/<x>/` 或 `/home/<x>/` 第一层 → 否则连接串里的用户 → 否则 `LAPTOP_USER_GUESS`。只有当它们**冲突**时才提问——比如项目在 `/Users/substance/…` 但连接用户是 `chenjh`，这种不一致会导致挂载失败（登录用户读不了别人的家目录），出命令前要点出来让用户对齐。
+**笔记本登录用户**（`LOGIN_USER`，用于把项目 sshfs 挂回来）—— 能推导就**不要**单独开一个问题：`LAST_LOGIN_USER`（缓存）→ 否则取已确认**项目目录**的 `/Users/<x>/` 或 `/home/<x>/` 第一层 → 否则连接串里的用户 → 否则 `LAPTOP_USER_GUESS`。这个推导在**批次返回之后**才能做（要先有已确认的项目目录 + 连接串），所以两种情况下可能多花**一轮追问**——要预留、别跳过：(a) 信号**冲突**，比如项目在 `/Users/substance/…` 但连接用户是 `chenjh`，这会导致挂载失败（登录用户读不了别人的家目录），点出来让用户对齐；(b) 推导**为空**（无 `/Users|/home/<x>/` 前缀、连接串是裸别名、且无 `LAPTOP_USER_GUESS`）——`setup-tunnel.sh` 必须有 `--user`，所以绝不要带空的 `LOGIN_USER` 出命令：直接问。
 
 `laptop-setup.sh` 会在笔记本端校验 `--project-dir` 并在缺失/读不到时循环提示——所以输入的路径是安全的，你不必从盒子端去验证它。
 
@@ -143,7 +143,7 @@ Phase 2 中，`laptop-setup.sh` 会确认 `<PORT>` 上的现有监听是否真�
   `ssh -o ClearAllForwardings=yes <host>`，或手动删除旧的 `RemoteForward` 行。
 - **setup 开始前出现 `remote port forwarding failed for listen port <PORT>`** → 使用了旧命令模板，fetch 脚本时没有 `-o ClearAllForwardings=yes`，SSH 在下载脚本前就尝试申请已有 `RemoteForward`。更新/重新安装本 skill 后重新运行 `$remote-harness`；新命令的 fetch 行会禁用转发。
 - **远端端口已监听但 alias 连不回笔记本** → 另一个或陈旧的隧道占用了该端口。当前 `laptop-setup.sh` 会自动尝试下一个空闲端口，并同步更新两端配置。若找不到或无法配置空闲端口，再关闭对应 SSH 会话；若它是多路复用 master，则运行 `ssh -O exit <host>`，然后重试。
-- **多个人共用同一个服务器账号** → 每个人在 Step 0a 确认一个各自不同的命名空间 `RU`，于是各自拿到自己的 `<RU>-mac` 别名和一个由 `RU` 哈希出来的反向端口——隧道彼此独立，`ssh <RU>-mac` 永远连回本人自己的笔记本。若两个人不小心确认了**相同**的 `RU`（例如都接受了某个通用猜测），他们的别名/端口就会冲突；重跑 Step 0a 并给出不同的命名空间即可。服务器端 `~/.ssh/config` 的写入用 `flock` 串行化，因此并发的 setup 不会互相覆盖对方的托管块。
+- **多个人共用同一个服务器账号** → 每个人在 Step 1 确认一个各自不同的命名空间 `RU`，于是各自拿到自己的 `<RU>-mac` 别名和一个由 `RU` 哈希出来的反向端口——隧道彼此独立，`ssh <RU>-mac` 永远连回本人自己的笔记本。若两个人不小心确认了**相同**的 `RU`（例如都接受了某个通用猜测），他们的别名/端口就会冲突；重跑并给出不同的命名空间即可。服务器端 `~/.ssh/config` 的写入是原子替换且用 `flock` 串行化，因此并发的 setup 不会互相覆盖对方的托管块。
 - **挂载失败**，`STATUS=failed` → 隧道可能尚未就绪；等待几秒后重试脚本。或在服务器上检查 `BOX_ALIAS` 是否为正确别名（在服务器上执行 `ssh <ALIAS> hostname`）。
 - **服务器未安装 sshfs** → 脚本会在用户安装后提示重试（隧道保持不变；无需从 Step 0 重新开始）。
 - **启动代理时出现密码提示** → 密钥错误或笔记本上的 sshd 未运行。

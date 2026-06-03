@@ -52,7 +52,8 @@ always offer a typed "Other". The mount validates the path; a wrong one just re-
 
 ## F-2.5 — Confirm the local mountpoint (required)
 
-**AskUserQuestion** "Where on THIS machine should the project mount and the agent launch?":
+**AskUserQuestion** "Where on THIS machine should the project mount and the agent launch?"
+(pre-fill `LAST_MOUNTPOINT` from the cache if present and still empty):
 - "Here: `<cwd>` (my current dir)" — only if empty (`PROJECT_DIR_EMPTY=1`); pre-select when empty.
   → pass `--mountpoint '<cwd>'`.
 - "A fresh `~/remote-harness-mounts/<name>` dir (auto)" — pre-select when the cwd is non-empty.

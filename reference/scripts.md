@@ -12,8 +12,9 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
   `ERROR`/`REMEDY` + `DIRECTION`. Reverse (default): checks the tunnel + local sshfs/FUSE. Pass
   `--alias <RU>-mac` to reuse ONLY that real user's namespaced tunnel (on a shared box account,
   without it preflight would scan every loopback alias and could latch onto another user's tunnel).
-  Forward: `--direction forward [--server '<via>']` checks local sshfs/FUSE (+ server reachability)
-  and lists the server's projects. Run this first.
+  Forward: `--direction forward [--server '<via>']` checks local sshfs/FUSE (+ server reachability).
+  It does NOT scan for the user's project (the flow asks the user to type the path; the legacy
+  `--no-list` flag is now a no-op). Run this first.
 - `"$RH/scripts/detect.sh"` — read-only probe: `REALUSER_GUESS`/`REALUSER_SOURCE`
   (`authkey|cwd|authorized_keys|none`)/`REALUSER_CANDIDATES` (the per-real-user namespace guess on a
   shared box account — confirm before use), `SUGGESTED_PORT` (hashed from `REALUSER_GUESS` to a

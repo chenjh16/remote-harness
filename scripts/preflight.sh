@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 # remote-harness / preflight.sh
 # ONE-SHOT prerequisite check for the mount flow — replaces running detect.sh + check-tunnel.sh
-# + the empty-dir check as separate agent round-trips. Runs every check in a single process,
-# STOPS at the first blocker with a detailed ERROR + REMEDY, and (when all pass) also lists the
-# laptop's candidate project dirs so the agent can go straight to directory selection.
+# + the empty-dir check as separate agent round-trips. Runs every check in a single process and
+# STOPS at the first blocker with a detailed ERROR + REMEDY.
 #
-#   preflight.sh [--alias <preferred>] [--project-dir <dir>] [--no-list]          # reverse (default)
-#   preflight.sh --direction forward [--server '<ssh-args|alias>'] [--no-list]     # forward
+#   preflight.sh [--alias <preferred>] [--project-dir <dir>]          # reverse (default)
+#   preflight.sh --direction forward [--server '<ssh-args|alias>']    # forward
 #
-# reverse: gate = a working reverse tunnel + local sshfs/FUSE; lists the laptop's projects.
-# forward: gate = local sshfs/FUSE (+ server reachability if --server given); lists the server's
-#          projects. Both emit DIRECTION and PROJECT_DIR_EMPTY.
+# reverse: gate = a working reverse tunnel + local sshfs/FUSE. forward: gate = local sshfs/FUSE
+# (+ server reachability if --server given). Both emit DIRECTION and PROJECT_DIR_EMPTY.
+# It does NOT scan for the user's project — the flow asks the user to TYPE the path (see SKILL.md
+# "ask, don't fish"); the legacy `--no-list` flag is still accepted but is now a no-op.
 #
 # Output: KEY=VALUE on stdout. PREFLIGHT=ok|blocked. When blocked: BLOCKED_STEP + ERROR + REMEDY.
-# When ok and listing: a line "---PROJECTS---" followed by list-projects.sh output.
 set -uo pipefail
 
 RH="${RH_HOME:-$HOME/.remote-harness}"
@@ -54,12 +53,12 @@ check_sshfs_fuse(){     # blocks on missing sshfs/FUSE; emits SSHFS/FUSE ok. Che
   emit FUSE ok
 }
 
-PREF_ALIAS="" PROJECT_DIR="$PWD" NO_LIST=0 DIRECTION=reverse SERVER=""
+PREF_ALIAS="" PROJECT_DIR="$PWD" DIRECTION=reverse SERVER=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --alias)       need_arg "$1" "${2-}"; PREF_ALIAS="$2"; shift 2;;
     --project-dir) need_arg "$1" "${2-}"; PROJECT_DIR="$2"; shift 2;;
-    --no-list)     NO_LIST=1; shift;;
+    --no-list)     shift;;                                            # legacy no-op: preflight never scans for projects
     --direction)   need_arg "$1" "${2-}"; DIRECTION="$2"; shift 2;;   # reverse (default) | forward
     --server)      need_arg "$1" "${2-}"; SERVER="$2"; shift 2;;      # forward: ssh args/alias to the project server
     *) shift;;
@@ -90,10 +89,6 @@ if [ "$DIRECTION" = forward ]; then
   if [ -n "$(ls -A "$PROJECT_DIR" 2>/dev/null)" ]; then emit PROJECT_DIR_EMPTY 0
   else emit PROJECT_DIR_EMPTY 1; fi
   emit PREFLIGHT ok
-  if [ "$NO_LIST" != 1 ] && [ -n "$SERVER" ]; then
-    echo "---PROJECTS---"
-    "$SCRIPTS/list-projects.sh" --via "$SERVER"
-  fi
   exit 0
 fi
 emit DIRECTION reverse
@@ -146,7 +141,3 @@ fi
 
 # ---- All clear -------------------------------------------------------------
 emit PREFLIGHT ok
-if [ "$NO_LIST" != 1 ]; then
-  echo "---PROJECTS---"
-  "$SCRIPTS/list-projects.sh" --via "$OK_ALIAS"
-fi

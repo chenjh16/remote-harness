@@ -34,7 +34,7 @@ Agent（即你）运行在用户的**本地机器**上；项目位于本机可�
 
 ## F-2.5 — 确认本地挂载点（必须）
 
-**AskUserQuestion**"本机的哪个目录用于挂载项目并启动 Agent？"：
+**AskUserQuestion**"本机的哪个目录用于挂载项目并启动 Agent？"（有缓存且仍为空就预填 `LAST_MOUNTPOINT`）：
 - "这里：`<cwd>`（当前目录）"——仅当目录为空（`PROJECT_DIR_EMPTY=1`）时提供；为空时预先选中。→ 传入 `--mountpoint '<cwd>'`。
 - "自动创建 `~/remote-harness-mounts/<name>` 目录"——当前目录非空时预先选中。→ **省略** `--mountpoint`。
 - 其他（另一个空的本地目录）→ 传入 `--mountpoint '<that dir>'`。
