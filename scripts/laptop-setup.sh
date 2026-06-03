@@ -79,6 +79,11 @@ else printf 'error: missing _common.sh next to %s — re-copy the full command\n
 
 # ---- auto-cleanup on exit/disconnect ---------------------------------------
 TUNNEL_PID=""; MOUNTED=0; CLEANED=0; RULE_INJECTED=0
+# The box logs into THIS laptop as the box alias's `User`, and Phase 1 authorizes the box key into
+# OUR account's authorized_keys — so the login user must be US. The laptop's own `id -un` is the
+# single source of truth (whatever the box-side setup guessed, e.g. from a project path); we force the
+# box alias to it in Phase 2.
+LAPTOP_USER="$(id -un 2>/dev/null || echo user)"
 
 # Path to the per-(box,port) pid file recording WHO owns the reverse tunnel (the live `ssh -N` pid),
 # so the LAST session out can drop it even if it didn't create it — same-user multi-project, where a
@@ -397,22 +402,40 @@ remote_box_alias_info() {
 }
 
 update_box_alias_port() {
-  local _port="$1" info laptop_user identity identity_arg="" out
+  local _port="$1" info identity identity_arg="" out
   info=$(remote_box_alias_info)
-  laptop_user=$(printf '%s\n' "$info" | awk -F= '/^USER=/{print $2; exit}')
   identity=$(printf '%s\n' "$info" | awk -F= '/^IDENTITY=/{print $2; exit}')
-  [ -n "$laptop_user" ] || laptop_user=$(id -un 2>/dev/null || printf user)
   [ -n "$identity" ] && identity_arg=" --identity $(sq "$identity")"
   out=$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" "
     rh=\"\${RH_HOME:-\$HOME/.remote-harness}\"
     [ -x \"\$rh/scripts/setup-tunnel.sh\" ] || { printf 'ERROR=missing setup-tunnel.sh\n'; exit 2; }
-    \"\$rh/scripts/setup-tunnel.sh\" --alias $(sq "$BOX_ALIAS") --port $(sq "$_port") --user $(sq "$laptop_user")$identity_arg
+    \"\$rh/scripts/setup-tunnel.sh\" --alias $(sq "$BOX_ALIAS") --port $(sq "$_port") --user $(sq "$LAPTOP_USER")$identity_arg
   " 2>&1) || {
     err "Could not update remote alias '$BOX_ALIAS' to port $_port."
     printf '%s\n' "$out" >&2
     return 1
   }
-  ok "box alias: updated '$BOX_ALIAS' to remote port $_port"
+  ok "box alias: updated '$BOX_ALIAS' to remote port $_port (login user $LAPTOP_USER)"
+}
+
+# Force the box alias's login user to THIS laptop's `id -un` (see LAPTOP_USER note above), overriding
+# any box-side guess. No-op when already correct. Non-fatal: the tunnel_alias_up/switch fallback still
+# guards a stale mismatch, so we never abort here.
+ensure_box_alias_user() {
+  local info cur identity identity_arg="" out
+  info=$(remote_box_alias_info)
+  cur=$(printf '%s\n' "$info" | awk -F= '/^USER=/{print $2; exit}')
+  [ "$cur" = "$LAPTOP_USER" ] && return 0
+  identity=$(printf '%s\n' "$info" | awk -F= '/^IDENTITY=/{print $2; exit}')
+  [ -n "$identity" ] && identity_arg=" --identity $(sq "$identity")"
+  out=$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" "
+    rh=\"\${RH_HOME:-\$HOME/.remote-harness}\"
+    [ -x \"\$rh/scripts/setup-tunnel.sh\" ] || { printf 'ERROR=missing setup-tunnel.sh\n'; exit 2; }
+    \"\$rh/scripts/setup-tunnel.sh\" --alias $(sq "$BOX_ALIAS") --port $(sq "$PORT") --user $(sq "$LAPTOP_USER")$identity_arg
+  " 2>&1) \
+    && ok "box alias: login user set to '$LAPTOP_USER' (this laptop account)" \
+    || { warn "could not set box alias '$BOX_ALIAS' login user to '$LAPTOP_USER'"; printf '%s\n' "$out" >&2; }
+  return 0
 }
 
 switch_tunnel_port() {
@@ -429,6 +452,11 @@ switch_tunnel_port() {
   write_target_forward "$PORT" || return 1
   chmod 600 "$CFG" 2>/dev/null || true
 }
+
+# Make the box log into this laptop as US (id -un), regardless of the box-side guess, BEFORE the
+# tunnel check — otherwise a wrong User would make tunnel_alias_up fail and trigger a needless
+# port switch.
+ensure_box_alias_user
 
 while :; do
   if tunnel_alias_up "$PORT"; then

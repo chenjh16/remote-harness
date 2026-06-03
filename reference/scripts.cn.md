@@ -36,7 +36,7 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
 - `"$RH/scripts/session-cache.sh"` — 在本机记住某命名空间上次的连接选择，让重复运行瞬间推荐（零远程发现）。
   `put <key> KEY=VALUE…` 写入；`get <key>` 打印存的 `KEY=VALUE` 行（无则空）。按命名空间存于
   `$RH_HOME/.sessions-cache/<key>.env`（权限 600）。键用真实用户 `RU`（反向）或服务器标识（正向）；
-  流程会缓存 `LAST_PROJECT_DIR`/`LAST_VIA`/`LAST_LOGIN_USER`/`LAST_MOUNTPOINT`/`LAST_LAUNCH`，并据此预填下次提问。
+  流程会缓存 `LAST_PROJECT_DIR`/`LAST_VIA`/`LAST_MOUNTPOINT`/`LAST_LAUNCH`，并据此预填下次提问。
 - `"$RH/scripts/mount-project.sh"` — 通过 sshfs 将 `<alias>:<remote-path>` 挂载到本地挂载点
   （方向无关）。拒绝挂载非空目标（`--force` 可覆盖）；对陈旧挂载重新验证/重新挂载；`--unmount` 卸载。
   输出 `STATUS=mounted|already-mounted|need-sshfs|not-empty|failed|unmounted`。

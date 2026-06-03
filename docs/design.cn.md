@@ -102,7 +102,7 @@ Agent 自己从不挂载任何东西。它拼出**一条命令**，由用户在�
 | `check-tunnel.sh` | 反向 | 验证监听器 + 通过隧道真实登录 | `SSH=up\|down`、`LAPTOP_HOSTNAME/USER` |
 | `mount-project.sh` | 两向 | sshfs 挂载/卸载到本地路径 | `STATUS=mounted\|already-mounted\|need-sshfs\|not-empty\|failed\|unmounted` |
 | `list-projects.sh` | 两向 | 枚举候选项目目录（**仅按需** —— 流程让用户输入路径，不扫描） | `PROJECT\t<路径>\tgit:<分支>` |
-| `session-cache.sh` | 两向 | 记住某命名空间上次的连接选择，让重复运行瞬间预填 | `LAST_PROJECT_DIR`/`LAST_VIA`/`LAST_LOGIN_USER`/… |
+| `session-cache.sh` | 两向 | 记住某命名空间上次的连接选择，让重复运行瞬间预填 | `LAST_PROJECT_DIR`/`LAST_VIA`/`LAST_MOUNTPOINT`/… |
 | `inject-rule.sh` | 两向 | 会话级"在 P 上构建"规则 + 各 Agent 启动参数 | `RH_STATUS`、`RH_LAUNCH_ENV`、`RH_LAUNCH_FLAGS` |
 
 ### 第 4 层 —— 共享库
@@ -144,6 +144,10 @@ Agent 自己从不挂载任何东西。它拼出**一条命令**，由用户在�
 
 盒子用 `ssh <RU>-mac` 连回笔记本（注入的规则用的就是它）；笔记本用 `ssh <host>-remote-harness`
 连到盒子——并*建立*隧道。
+
+`<RU>-mac` 的**登录用户**是权威的：它必须是笔记本自己的 `id -un`（Phase 1 正是把盒子公钥授权进那个账号的
+`authorized_keys`），所以 `laptop-setup.sh` 会把它强制设成 `id -un`，无视盒子端的任何猜测——agent 绝不从项目
+路径推导它，也不存在"home 目录名不匹配"要对账。
 
 ## 5. 正向流程细节
 

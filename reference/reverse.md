@@ -43,7 +43,7 @@ the batched questions below.
 RH="${RH_HOME:-$HOME/.remote-harness}"
 "$RH/scripts/detect.sh"                                 # REALUSER_GUESS/SOURCE/CANDIDATES, SUGGESTED_PORT, DEFAULT_IDENTITY, SSHD_TCP_FORWARDING
 "$RH/scripts/connect-guesses.sh"                        # candidate laptop→box `ssh …` strings
-"$RH/scripts/session-cache.sh" get "<REALUSER_GUESS>"   # LAST_PROJECT_DIR/LAST_VIA/LAST_LOGIN_USER/LAST_MOUNTPOINT (empty on first run)
+"$RH/scripts/session-cache.sh" get "<REALUSER_GUESS>"   # LAST_PROJECT_DIR/LAST_VIA/LAST_MOUNTPOINT (empty on first run)
 "$RH/scripts/preflight.sh" --alias "<REALUSER_GUESS>-mac" --no-list   # tunnel up? + sshfs/FUSE + PROJECT_DIR/PROJECT_DIR_EMPTY (cwd)
 ```
 
@@ -69,9 +69,12 @@ sshfs hides existing files.)
 ## Step 1 — Confirm direction, then ask everything in ONE batch
 
 First confirm the **direction** (detection only pre-selects: `SSH_CONNECTION` set / `ON_REMOTE=1` ⇒
-reverse). Then ask the reverse decisions **together** (AskUserQuestion takes up to 4) — every value
-pre-filled from Step 0, every one with a free-form "Other". On a repeat run (cache hit) most are
-one-click confirmations.
+reverse). Confirm it **separately** — don't spend a batch slot on it. Then ask the reverse decisions
+**together in ONE AskUserQuestion** (exactly these four; it takes up to 4) — every value pre-filled
+from Step 0, every one with a free-form "Other". On a repeat run (cache hit) most are one-click
+confirmations. "Which existing tunnel to reuse" IS question 1 (the namespace), not an extra question;
+and the **connect string is question 4 of this same batch — never defer it to a later round** (it's
+always needed and never depends on the others).
 
 1. **Namespace `RU`** — pre-fill `REALUSER_GUESS`; offer `REALUSER_CANDIDATES` + Other. Your box alias
    is `<RU>-mac`, the reverse port is hashed stably from `RU`. (Empty guess ⇒ no safe default, ask.)
@@ -89,16 +92,15 @@ one-click confirmations.
    `-p`/`-l`/`-i`, `-J`/`-o ProxyJump=…` (no shell-quoting needed); for `ProxyCommand`/`-F`/quoted
    spaces, tell the user to use a `~/.ssh/config` Host alias and pass that.
 
-**Laptop login user** (`LOGIN_USER`, used to sshfs the project back) — do NOT add a separate question
-when you can derive it: `LAST_LOGIN_USER` (cache) → else the `/Users/<x>/` or `/home/<x>/` first
-component of the confirmed **project dir** → else the user in the connect string → else
-`LAPTOP_USER_GUESS`. This derivation runs **after the batch returns** (it needs the confirmed project
-dir + connect string), so it can cost **one follow-up question** in two cases — budget for it, don't
-skip it: (a) the signals **disagree**, e.g. the project is under `/Users/substance/…` but the connect
-user is `chenjh` — that mismatch breaks the mount (the login user can't read another user's home), so
-surface it; (b) the derivation is **empty** (no `/Users|/home/<x>/` prefix, a bare-alias connect, and
-no `LAPTOP_USER_GUESS`) — `setup-tunnel.sh` requires `--user`, so never emit with an empty
-`LOGIN_USER`: ask for it.
+**Laptop login user — do NOT ask, derive from the path, or warn about it.** The box logs into the
+laptop as whoever runs the command there, and `laptop-setup.sh` authoritatively sets the box alias's
+login user to the laptop's own **`id -un`** — the only correct value, because that is whose
+`authorized_keys` receives the box key. So **never** derive a user from the project path's
+`/Users/<x>/` and **never** warn about a home-dir-name mismatch (macOS home-dir names need not equal
+usernames anyway); if the path is genuinely unreadable by that account, it surfaces honestly at mount
+time. The `--user` you pass to `setup-tunnel.sh` in Step 2 is just a **seed** that laptop-setup
+overrides — use `LAPTOP_USER` from preflight (reuse) or `LAPTOP_USER_GUESS` (else any non-empty
+value).
 
 `laptop-setup.sh` validates `--project-dir` on the laptop and loops/prompts if it's missing or
 unreadable — so a typed path is safe; you don't need to validate it from the box.
@@ -113,7 +115,7 @@ emit-only variant. Otherwise build the box endpoint (pass `--gen-key` when `DEFA
 "$RH/scripts/setup-tunnel.sh" \
   --alias     <RU>-mac \
   --namespace <RU> \                # derive the STABLE reverse port from RU; omit --port
-  --user      <LOGIN_USER> \        # the derived/confirmed laptop login user
+  --user      <USER_SEED> \         # seed ONLY — laptop-setup overrides it with the laptop's id -un
   [--identity <DEFAULT_IDENTITY>] \
   [--gen-key]
 ```
@@ -126,7 +128,7 @@ Then **remember** the choices so the next run for this namespace pre-fills insta
 
 ```bash
 "$RH/scripts/session-cache.sh" put <RU> \
-  "LAST_PROJECT_DIR=<LAPTOP_DIR>" "LAST_VIA=<CONNECT>" "LAST_LOGIN_USER=<LOGIN_USER>" \
+  "LAST_PROJECT_DIR=<LAPTOP_DIR>" "LAST_VIA=<CONNECT>" \
   "LAST_MOUNTPOINT=<BOX_MP>" "LAST_LAUNCH=<LAUNCH>"
 ```
 

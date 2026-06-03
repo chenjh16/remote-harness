@@ -252,6 +252,7 @@ assert_grep "$tmp/tunnel-conflict.out" "Remote port 32026 is already listening" 
 assert_grep "$tmp/tunnel-conflict.out" "Switching this setup to remote port 32027" "tunnel conflict fallback"
 assert_grep "$conflict_home/.ssh/config" "    RemoteForward 32027 127.0.0.1:22" "local RemoteForward switched"
 assert_grep "$conflict_setup_log" "--port '32027'" "remote alias switched"
+assert_grep "$conflict_setup_log" "--user '$(id -un)'" "box alias login user forced to local id -un"
 assert_grep "$tmp/tunnel-conflict.out" "Tunnel active — remote port 32027 is live" "tunnel active after fallback"
 
 ssh_log="$tmp/ssh-project.log"

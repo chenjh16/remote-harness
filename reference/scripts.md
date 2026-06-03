@@ -43,7 +43,7 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
   a re-run recommends them instantly (zero remote discovery). `put <key> KEY=VALUE…` stores;
   `get <key>` prints the stored `KEY=VALUE` lines (none if absent). Per-namespace file under
   `$RH_HOME/.sessions-cache/<key>.env` (mode 600). Key by the real-user `RU` (reverse) or the server
-  token (forward); the flows cache `LAST_PROJECT_DIR`/`LAST_VIA`/`LAST_LOGIN_USER`/`LAST_MOUNTPOINT`/
+  token (forward); the flows cache `LAST_PROJECT_DIR`/`LAST_VIA`/`LAST_MOUNTPOINT`/
   `LAST_LAUNCH` and pre-fill the next run's questions from them.
 - `"$RH/scripts/mount-project.sh"` — sshfs-mount `<alias>:<remote-path>` onto a LOCAL mountpoint
   (direction-agnostic). Refuses a non-empty target (`--force` to override); revalidates/remounts a

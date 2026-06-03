@@ -114,7 +114,7 @@ results reliably without brittle natural-language scraping.
 | `check-tunnel.sh` | reverse | verify listener + a real login through the tunnel | `SSH=up\|down`, `LAPTOP_HOSTNAME/USER` |
 | `mount-project.sh` | both | sshfs mount/unmount onto a local path | `STATUS=mounted\|already-mounted\|need-sshfs\|not-empty\|failed\|unmounted` |
 | `list-projects.sh` | both | enumerate candidate project dirs (**opt-in only** — the flow asks the user to type the path) | `PROJECT\t<path>\tgit:<branch>` |
-| `session-cache.sh` | both | remember a namespace's last connection choices for instant re-runs | `LAST_PROJECT_DIR`/`LAST_VIA`/`LAST_LOGIN_USER`/… |
+| `session-cache.sh` | both | remember a namespace's last connection choices for instant re-runs | `LAST_PROJECT_DIR`/`LAST_VIA`/`LAST_MOUNTPOINT`/… |
 | `inject-rule.sh` | both | per-session "build on P" rule + per-agent launch flags | `RH_STATUS`, `RH_LAUNCH_ENV`, `RH_LAUNCH_FLAGS` |
 
 ### Layer 4 — the shared library
@@ -165,6 +165,11 @@ and drops the tunnel.
 
 The box reaches the laptop with `ssh <RU>-mac` (that is what the injected rule uses); the laptop
 reaches the box — and *establishes* the tunnel — with `ssh <host>-remote-harness`.
+
+The `<RU>-mac` **login user** is authoritative: it must be the laptop's own `id -un` (that is whose
+`authorized_keys` Phase 1 authorizes the box key into), so `laptop-setup.sh` forces it to `id -un`
+regardless of any box-side guess — the agent never derives it from the project path, and there is no
+"home-dir-name mismatch" to reconcile.
 
 ## 5. The forward flow in detail
 
