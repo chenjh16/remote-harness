@@ -330,7 +330,8 @@ det_alice="$(HOME="$ru_home" bash -c 'cd "$0/alice/proj" && exec bash "$1"' "$ru
 printf '%s\n' "$det_alice" | grep -q '^REALUSER_GUESS=alice$'  || fail "detect: RU from launch dir"
 printf '%s\n' "$det_alice" | grep -q '^REALUSER_SOURCE=cwd$'   || fail "detect: RU source = cwd"
 det_port="$(printf '%s\n' "$det_alice" | awk -F= '/^SUGGESTED_PORT=/{print $2}')"
-case "$det_port" in *22) ;; *) fail "detect: hashed port should end in 22 (got '$det_port')";; esac
+case "$det_port" in *2) ;; *) fail "detect: hashed port should end in 2 (got '$det_port')";; esac
+{ [ "$det_port" -ge 20002 ] && [ "$det_port" -le 29992 ]; } || fail "detect: hashed port out of [20002,29992] (got '$det_port')"
 # a generic workspace dir must NOT be treated as a real-user namespace
 det_work="$(HOME="$ru_home" bash -c 'cd "$0/work/proj" && exec bash "$1"' "$ru_home" "$ROOT/scripts/detect.sh" 2>/dev/null)"
 printf '%s\n' "$det_work" | grep -q '^REALUSER_SOURCE=none$' || fail "detect: generic dir wrongly used as RU"
@@ -382,6 +383,15 @@ printf '%s\n' "$sc_out" | grep -qxF 'LAST_LOGIN_USER=substance' || fail "session
 [ -z "$(RH_HOME="$sc_rh" bash "$ROOT/scripts/session-cache.sh" get 'nobody')" ] || fail "session-cache: absent key not empty"
 RH_HOME="$sc_rh" bash "$ROOT/scripts/session-cache.sh" put 'k' 'NOEQUALS' 'GOOD=1' >/dev/null
 [ "$(RH_HOME="$sc_rh" bash "$ROOT/scripts/session-cache.sh" get 'k')" = 'GOOD=1' ] || fail "session-cache: malformed pair not filtered"
+
+# --- inject-rule.sh: a pathological mountpoint ('..') must NOT escape $RH_HOME/.sessions/ ----
+ir_rh="$tmp/ir-home/.remote-harness"; ir_home="$tmp/ir-home2"
+mkdir -p "$ir_rh" "$ir_home" "$tmp/ir-code"
+RH_HOME="$ir_rh" HOME="$ir_home" "$ROOT/scripts/inject-rule.sh" on claude "$tmp/ir-code" laptop ".." 0 >/dev/null
+[ -f "$ir_rh/.sessions/default/rule.md" ] || fail "inject-rule: '..' mountpoint not neutralized to .sessions/default"
+[ ! -e "$ir_rh/rule.md" ] || fail "inject-rule: '..' mountpoint escaped to RH_HOME"
+RH_HOME="$ir_rh" HOME="$ir_home" "$ROOT/scripts/inject-rule.sh" off claude ".." >/dev/null
+[ ! -d "$ir_rh/.sessions/default" ] || fail "inject-rule: '..' session dir not cleaned"
 
 while IFS= read -r f; do
   [ -f "${f%.md}.cn.md" ] || fail "missing Chinese doc counterpart for $f"

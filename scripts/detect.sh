@@ -19,7 +19,6 @@ listening_addrs() {
 listening_ports() {
   listening_addrs | sed -E 's/.*[:.]([0-9]+)$/\1/' | grep -E '^[0-9]+$' | sort -un
 }
-port_in_use() { listening_ports | grep -qx "$1"; }
 
 note "== remote-harness: probing environment =="
 
@@ -123,19 +122,19 @@ low=${low:-32768}
 emit EPHEMERAL_LOW "$low"
 
 # --- Suggest a reverse-tunnel port. With a real-user namespace, derive a STABLE base port from it
-# --- (hash -> a ".22" slot in [20022,29922], below the ephemeral floor) so different users land on
-# --- different ports and the SAME user reconnects to the SAME port (clean reuse); then probe for a
-# --- free slot. Otherwise (or if that range overlaps the ephemeral floor) fall back to the legacy
-# --- "highest free port ending in 22". setup-tunnel.sh derives the same way from the CONFIRMED
-# --- namespace — KEEP THE SLOT FORMULA (20022 + (cksum%100 ...)*100) IN SYNC with this.
+# --- (hash RU -> a port in [20002,29992], step 10, ends in 2, below the ephemeral floor; 1000 slots
+# --- so distinct users rarely collide) so the SAME user reconnects to the SAME port (clean reuse);
+# --- then probe for a free slot. Otherwise (or if that range overlaps the ephemeral floor) fall back
+# --- to the legacy "highest free port ending in 22". setup-tunnel.sh derives the same way from the
+# --- CONFIRMED namespace — KEEP THE SLOT FORMULA (20002 + (cksum%1000)*10) IN SYNC with this.
 inuse_ports="$(listening_ports)"
 free_port() { ! printf '%s\n' "$inuse_ports" | grep -qx "$1"; }
 suggested=""
-if [ -n "$ru" ] && [ "$low" -gt 29922 ]; then
-  bb=$(( $(printf '%s' "$ru" | cksum | awk '{print $1}') % 100 ))
+if [ -n "$ru" ] && [ "$low" -gt 29992 ]; then
+  bb=$(( $(printf '%s' "$ru" | cksum | awk '{print $1}') % 1000 ))
   i=0
-  while [ "$i" -lt 100 ]; do
-    p=$(( 20022 + ((bb + i) % 100) * 100 ))
+  while [ "$i" -lt 256 ]; do
+    p=$(( 20002 + ((bb + i) % 1000) * 10 ))
     free_port "$p" && { suggested="$p"; break; }
     i=$(( i + 1 ))
   done

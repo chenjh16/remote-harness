@@ -28,7 +28,8 @@ rh_lock() {
   if command -v flock >/dev/null 2>&1; then
     exec 9>"$LOCK" 2>/dev/null && flock -w 10 9 2>/dev/null || true
   else
-    _n=0; while ! mkdir "$LOCK.d" 2>/dev/null; do _n=$((_n+1)); [ "$_n" -ge 50 ] && break; sleep 0.2 2>/dev/null || sleep 1; done
+    # No flock (e.g. macOS): atomic mkdir spin-lock. Integer sleep only (BSD sleep rejects fractions).
+    _n=0; while ! mkdir "$LOCK.d" 2>/dev/null; do _n=$((_n+1)); [ "$_n" -ge 15 ] && break; sleep 1; done
   fi
 }
 rh_unlock() {
@@ -60,19 +61,22 @@ done
   || die "usage: setup-tunnel.sh --alias NAME --user LAPTOP_USER (--port PORT | --namespace RU) [--identity KEYFILE] [--gen-key]"
 
 # Derive a STABLE reverse port from the confirmed real-user namespace when no explicit --port was
-# given: hash -> a ".22" slot in [20022,29922] below the ephemeral floor, then probe upward for a
-# free slot. Same slot formula as detect.sh's SUGGESTED_PORT — KEEP THEM IN SYNC.
+# given: hash RU -> a port in [20002,29992] (step 10, ends in 2, below the ephemeral floor; 1000 slots
+# so distinct users rarely collide), then probe for a free slot. The namespace is sanitized exactly as
+# detect.sh sanitizes REALUSER_GUESS, so both hash identical bytes — SAME formula as detect.sh's
+# SUGGESTED_PORT, KEEP THEM IN SYNC.
 if [ -z "$PORT" ]; then
   [ -n "$NAMESPACE" ] || die "need --port PORT or --namespace RU"
+  _ns="$(printf '%s' "$NAMESPACE" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._-]*//; s/[._-]*$//')"
   _inuse="$(listening_ports)"
   _low=$(awk '{print $1}' /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null)
   [ -z "$_low" ] && _low=$(sysctl -n net.inet.ip.portrange.first 2>/dev/null)
   _low=${_low:-32768}
-  if [ "$_low" -gt 29922 ]; then
-    _bb=$(( $(printf '%s' "$NAMESPACE" | cksum | awk '{print $1}') % 100 ))
+  if [ "$_low" -gt 29992 ]; then
+    _bb=$(( $(printf '%s' "$_ns" | cksum | awk '{print $1}') % 1000 ))
     _i=0
-    while [ "$_i" -lt 100 ]; do
-      _p=$(( 20022 + ((_bb + _i) % 100) * 100 ))
+    while [ "$_i" -lt 256 ]; do
+      _p=$(( 20002 + ((_bb + _i) % 1000) * 10 ))
       printf '%s\n' "$_inuse" | grep -qx "$_p" || { PORT="$_p"; break; }
       _i=$(( _i + 1 ))
     done
@@ -99,8 +103,17 @@ if [ -z "$IDENTITY" ]; then
 fi
 if [ -z "$IDENTITY" ] && [ "$GEN_KEY" = 1 ]; then
   IDENTITY="$HOME/.ssh/id_ed25519"
-  note "No SSH key found; generating $IDENTITY (no passphrase)."
-  ssh-keygen -t ed25519 -N "" -f "$IDENTITY" -C "remote-harness@$(hostname 2>/dev/null || echo host)" >/dev/null
+  # Serialize keygen on a SHARED box account: two concurrent first-time runs must not both write
+  # ~/.ssh/id_ed25519 (the second would clobber the first's already-authorized keypair). Under the
+  # lock, generate only if it still doesn't exist; otherwise reuse the one the other run created.
+  rh_lock
+  if [ ! -f "$IDENTITY" ]; then
+    note "No SSH key found; generating $IDENTITY (no passphrase)."
+    ssh-keygen -t ed25519 -N "" -f "$IDENTITY" -C "remote-harness@$(hostname 2>/dev/null || echo host)" >/dev/null
+  else
+    note "SSH key appeared concurrently; reusing $IDENTITY."
+  fi
+  rh_unlock
 fi
 
 # --- ephemeral-floor sanity check ------------------------------------------
@@ -115,18 +128,22 @@ fi
 # --- write an idempotent managed block -------------------------------------
 BEGIN="# >>> remote-harness:${ALIAS} >>> (managed; edits here are overwritten)"
 END="# <<< remote-harness:${ALIAS} <<<"
-rh_lock   # serialize the shared-config edit below; rh_unlock after the chmod
+rh_lock   # serialize the shared-config edit below; rh_unlock after the atomic replace
 cp "$CFG" "$CFG.rh-bak.$(date +%Y%m%d%H%M%S 2>/dev/null || echo bak)" 2>/dev/null || true
 
-tmp="$(mktemp)"
+strip="$(mktemp "${TMPDIR:-/tmp}/rh-cfg.XXXXXX")"
 awk -v b="$BEGIN" -v e="$END" '
   index($0,"# >>> remote-harness:")==1 && index($0, b)==1 {skip=1}
   skip==0 {print}
   $0==e {skip=0}
-' "$CFG" > "$tmp"
+' "$CFG" > "$strip"
 
+# Build the new config in a SAME-DIRECTORY temp, then rename over $CFG. The rename is atomic on one
+# filesystem, so even if the lock above was lost (timeout / no flock), a concurrent reader/writer sees
+# the old OR the fully-new file — never a half-written one, and at worst a lost update, not corruption.
+new="$(mktemp "$HOME/.ssh/.rh-cfg.XXXXXX" 2>/dev/null)" || new="$CFG.rh-new.$$"
 {
-  cat "$tmp"
+  cat "$strip"
   printf '%s\n' "$BEGIN"
   printf '# %s reaches your laptop via the reverse tunnel (laptop adds: RemoteForward %s 127.0.0.1:22)\n' "$ALIAS" "$PORT"
   printf 'Host %s\n' "$ALIAS"
@@ -145,9 +162,10 @@ awk -v b="$BEGIN" -v e="$END" '
   printf '    ControlPath ~/.ssh/cm-%%C\n'
   printf '    ControlPersist 5m\n'
   printf '%s\n' "$END"
-} > "$CFG"
-rm -f "$tmp"
-chmod 600 "$CFG" 2>/dev/null || true
+} > "$new"
+chmod 600 "$new" 2>/dev/null || true
+mv "$new" "$CFG"
+rm -f "$strip"
 rh_unlock
 
 emit STATUS configured

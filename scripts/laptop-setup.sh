@@ -233,7 +233,7 @@ fi
 
 # -- write RemoteForward to ~/.ssh/config --
 CFG="$HOME/.ssh/config"; touch "$CFG"; chmod 600 "$CFG" 2>/dev/null || true
-TARGET=""; REUSE=0   # block_exists / remove_host_block / write_managed_alias come from _common.sh
+TARGET=""   # block_exists / remove_host_block / write_managed_alias come from _common.sh
 
 legacy_host_has_rh_forward() {
   local _host="$1"
@@ -290,47 +290,23 @@ fi
 [ -z "${V_PROXYJUMP:-}" ] || safe_ssh_token "$V_PROXYJUMP" || { printf 'unsafe resolved ssh ProxyJump: %s\n' "$V_PROXYJUMP" >&2; exit 2; }
 TARGET="${HOST:-${BOX_USER:-${V_USER:-box}}}-remote-harness"
 write_target_forward() {
-  local _port="$1" _rf_line _tmp
+  local _port="$1" _rf_line
   _rf_line="    RemoteForward $_port 127.0.0.1:22"
-  if [ "$REUSE" = 1 ]; then
-    _tmp="$(mktemp)"
-    # Insert RemoteForward + tunnel keepalives into the user's existing alias block, de-duping our own
-    # managed lines first so re-runs stay idempotent (use 'hit' not 'in' — reserved in BSD awk). The
-    # keepalives mirror the managed-alias branch so a reused alias detects a half-open NAT tunnel and
-    # fails loudly on a port collision instead of leaving a live-but-no-forward connection.
-    if awk -v host="$TARGET" -v rf="$_rf_line" \
-        -v o1="    ServerAliveInterval 30" -v o2="    ServerAliveCountMax 3" \
-        -v o3="    ExitOnForwardFailure yes" -v o4="    TCPKeepAlive yes" '
-      function H(s){return s~/^[ \t]*[Hh][Oo][Ss][Tt][ \t]/}
-      BEGIN{hit=0}
-      {if(H($0)){hit=0;n=split($0,a,/[ \t]+/);for(i=1;i<=n;i++){if(a[i]=="#")break;if(i>1&&a[i]==host)hit=1}
-       print;if(hit){print rf;print o1;print o2;print o3;print o4}next}
-       if(hit&&$0~/^[ \t]*RemoteForward[ \t]+[0-9]+[ \t]+127\.0\.0\.1:22[ \t]*$/)next
-       if(hit&&$0~/^[ \t]*(ServerAliveInterval|ServerAliveCountMax|ExitOnForwardFailure|TCPKeepAlive)([ \t]|$)/)next
-       print}' "$CFG" > "$_tmp" && mv "$_tmp" "$CFG"; then
-      ok "ssh config: set RemoteForward $_port + keepalives inside existing 'Host $TARGET'"
-    else
-      warn "ssh config: awk edit failed — add '$_rf_line' under 'Host $TARGET' manually"; rm -f "$_tmp"
-      return 1
-    fi
+  # Create-or-replace a DEDICATED managed alias carrying the exact --via identity + RemoteForward
+  # (idempotent). Keepalives so a half-open tunnel (NAT idle / laptop sleep) is detected;
+  # ExitOnForwardFailure so a port-collision fails loudly instead of leaving a live-but-no-forward
+  # connection that polls as "up".
+  if write_managed_alias "$TARGET" "$_rf_line" \
+      "    ServerAliveInterval 30" "    ServerAliveCountMax 3" \
+      "    ExitOnForwardFailure yes" "    TCPKeepAlive yes"; then
+    ok "ssh config: wrote managed 'Host $TARGET' (HostName ${V_HOST:-?}, port ${V_PORT:-22}, user ${V_USER:-<login default>}) + RemoteForward $_port"
   else
-    # Create-or-replace a managed alias carrying the exact --via identity + RemoteForward (idempotent).
-    # Keepalives so a half-open tunnel (NAT idle / laptop sleep) is detected; ExitOnForwardFailure so a
-    # port-collision fails loudly instead of leaving a live-but-no-forward connection that polls as "up".
-    if write_managed_alias "$TARGET" "$_rf_line" \
-        "    ServerAliveInterval 30" "    ServerAliveCountMax 3" \
-        "    ExitOnForwardFailure yes" "    TCPKeepAlive yes"; then
-      ok "ssh config: wrote managed 'Host $TARGET' (HostName ${V_HOST:-?}, port ${V_PORT:-22}, user ${V_USER:-<login default>}) + RemoteForward $_port"
-    else
-      err "ssh config: could not write managed Host '$TARGET'"
-      return 1
-    fi
+    err "ssh config: could not write managed Host '$TARGET'"
+    return 1
   fi
 }
 write_target_forward "$PORT" || exit 2
-if [ "$REUSE" != 1 ]; then
-  say "    Reconnect to the box via: ${_B}ssh $TARGET${_0}"
-fi
+say "    Reconnect to the box via: ${_B}ssh $TARGET${_0}"
 chmod 600 "$CFG" 2>/dev/null || true
 
 # -- default box-alias --
@@ -656,7 +632,7 @@ if [ "$AGENTS_ONLY" = 1 ] && [ "$LAUNCH_BASE" = claude ]; then
   say "  Note: this project has AGENTS.md but no CLAUDE.md, and Claude Code reads CLAUDE.md."
   if ask "  Create CLAUDE.md (importing @AGENTS.md) IN YOUR LAPTOP REPO? (not auto-removed)"; then
     ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 "$TARGET" \
-      "printf '@AGENTS.md\n' > $(sq "$REMOTE_MOUNTPOINT")/CLAUDE.md" 2>/dev/null \
+      "printf '@AGENTS.md\n' > $(sq "$REMOTE_MOUNTPOINT/CLAUDE.md")" 2>/dev/null \
       && ok "CLAUDE.md created in the repo" || warn "could not create CLAUDE.md — do it manually"
   fi
 fi

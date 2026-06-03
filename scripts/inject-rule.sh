@@ -30,6 +30,7 @@ sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 session_dir() {  # $1 = mountpoint (session key) -> box-side per-session dir
   key="$(printf '%s' "${1:-default}" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
+  case "$key" in ""|.|..) key=default;; esac   # never let the key escape $RH_HOME/.sessions/ (e.g. "..")
   printf '%s/.sessions/%s' "${RH_HOME:-$HOME/.remote-harness}" "$key"
 }
 
@@ -167,8 +168,8 @@ case "${1:-}" in
     ;;
   off)
     mp="${3:-}"; SD="$(session_dir "$mp")"
-    # All agents' artifacts (rule file, opencode config, codex home) live in the session dir, and
-    # none of them touched the mounted repo — so cleanup is just removing that dir.
+    # All agents' artifacts (the rule file, and for opencode its session config) live in the session
+    # dir; none of them touched the mounted repo — so cleanup is just removing that dir.
     if [ -d "$SD" ]; then
       rm -rf "$SD" 2>/dev/null && echo "RH_STATUS=RESTORED" || echo "RH_STATUS=ERROR"
     else

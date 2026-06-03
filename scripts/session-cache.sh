@@ -32,7 +32,10 @@ case "$cmd" in
     f="$(key_file "${1:-}")" || { printf 'ERROR=bad key\n' >&2; exit 2; }
     [ $# -gt 0 ] && shift
     mkdir -p "$DIR" 2>/dev/null || true; chmod 700 "$DIR" 2>/dev/null || true
-    tmp="$(mktemp "${TMPDIR:-/tmp}/rh-cache.XXXXXX")" || { printf 'ERROR=mktemp\n' >&2; exit 1; }
+    # mktemp INSIDE $DIR so the final `mv` is a same-filesystem atomic rename (a /tmp temp would make
+    # `mv` a non-atomic copy+unlink when /tmp is a separate fs, and a concurrent `get` could read a
+    # half-written file).
+    tmp="$(mktemp "$DIR/.rh-cache.XXXXXX" 2>/dev/null)" || { printf 'ERROR=mktemp\n' >&2; exit 1; }
     for kv in "$@"; do
       case "$kv" in
         *'
