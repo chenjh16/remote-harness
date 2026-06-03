@@ -16,30 +16,44 @@ this box:  ssh <BOX_ALIAS>          → 127.0.0.1:<PORT> → (tunnel) → laptop
 
 笔记本只需在配置中加入 `RemoteForward` 后重新连接即可。`BOX_ALIAS`（例如 `my-mac`）是服务器用来访问笔记本的别名。
 
-## Step 0 — 预检（一次调用，一个决策）
+## Step 0 — 先识别真实用户（命名空间），再预检
+
+一个服务器账号可能被**多个人共享**，每个人都跑 remote-harness 连回各自的笔记本。为了避免他们的反向隧道相互冲突——更糟的是把 `ssh <alias>` 串到**别人的**笔记本上——我们按**真实用户**给隧道（ssh 别名 + 反向端口）做命名空间隔离。所以先识别这个命名空间，再针对它做预检。
+
+### 0a. 确认命名空间（`RU`）—— 询问，不要推断
 
 ```bash
-"$RH/scripts/preflight.sh" --no-list   # --no-list: 将项目扫描推迟到第 1b.5 步（仅在隧道确认可用后执行）
+"$RH/scripts/detect.sh"   # REALUSER_GUESS/SOURCE/CANDIDATES、SUGGESTED_PORT（按 RU 稳定哈希）、
+                          # LAPTOP_USER_GUESS、DEFAULT_IDENTITY、SSHD_TCP_FORWARDING
+```
+
+`REALUSER_GUESS` 是对"你在这个账号上是谁"的尽力猜测，按优先级取自：本次会话登录所用公钥的 comment（需要 sshd `ExposeAuthInfo yes`，默认关闭）、启动目录中 `~/<名字>/…` 的第一层路径名（那个软性的按人约定）、或 authorized_keys 里的 comment。`REALUSER_SOURCE` 说明命中的是哪一个；`REALUSER_CANDIDATES` 列出其余候选。
+
+**向用户提问（确认，不要推断）：** "在这个（可能共享的）账号上，用什么名字给你的隧道做命名空间？"——预填 `REALUSER_GUESS`，并提供 `REALUSER_CANDIDATES` + 其他/自由输入。把答案记作 **`RU`**。你的服务器端别名就是 **`<RU>-mac`**；反向端口由 `RU` 稳定推导。若 `REALUSER_GUESS` 为空（例如你直接从 `$HOME` 启动，或目录是 `work`/`src` 这类通用名），就必须直接询问——没有安全的默认值。
+
+### 0b. 针对你的命名空间做预检
+
+```bash
+"$RH/scripts/preflight.sh" --alias <RU>-mac --no-list   # --no-list: 将项目扫描推迟到第 1b.5 步
 ```
 
 读取 `PREFLIGHT` 的值：
 
-- **`ok`** → 隧道已正常工作（`TUNNEL_ALIAS`、`TUNNEL_PORT`、`LAPTOP_HOSTNAME` 均已就绪）。
-  隧道已建立 — 立即输出笔记本命令（参见"仅输出"变体一节）。
+- **`ok`** → 你的命名空间隧道（`<RU>-mac`）已经连回你的笔记本（`TUNNEL_ALIAS`、`TUNNEL_PORT`、
+  `LAPTOP_HOSTNAME` 均已就绪）。无需新建 — 立即输出笔记本命令（参见"仅输出"变体一节）。这同时是
+  **同一用户、另一个项目**的路径：一条隧道+端口可承载任意多个 sshfs 挂载，所以第二个项目只是在现有隧道上重新挂载——不需要新端口。
 - **`blocked`** — 处理 `BLOCKED_STEP`：
-  - `tunnel` → 没有可用的回程通道 → 进入 **Step 1**（见下文）。
+  - `tunnel` → 你的 `<RU>-mac` 隧道尚未建立 → 进入 **Step 1**（见下文）。
   - `sshfs` → sshfs/FUSE 缺失：显示 `REMEDY`，提问用户（"已安装？ ✅/⚠️"），
     ✅ 后重新执行；⚠️ 后读取问题并协助解决。循环直至问题解决。
+
+传入 `--alias <RU>-mac` 让预检只考虑你自己的隧道——在共享账号上，它绝不能复用别人的回环别名而把你挂到错误的笔记本上。
 
 `PROJECT_DIR` / `PROJECT_DIR_EMPTY` 用于 Step 1b.5 中**服务器挂载点**的决策（不影响流程是否继续）。挂载点必须为空目录，因为 sshfs 会遮蔽其中的已有文件。
 
 ## Step 1 — 搭建隧道并移交给笔记本
 
-### 1a. 配置服务器端
-
-```bash
-"$RH/scripts/detect.sh"   # get SUGGESTED_PORT, LAPTOP_USER_GUESS, DEFAULT_IDENTITY
-```
+### 1a. 配置服务器端（detect 已在 Step 0a 跑过）
 
 若 `SSHD_TCP_FORWARDING=restricted-needs-attention`：提示该服务器的 sshd 阻止了反向转发（`AllowTcpForwarding no|local`）——用户需将其设为 `yes`/`remote` 并重启 sshd。
 
@@ -47,14 +61,14 @@ this box:  ssh <BOX_ALIAS>          → 127.0.0.1:<PORT> → (tunnel) → laptop
 
 ```bash
 "$RH/scripts/setup-tunnel.sh" \
-  --alias <LAPTOP_USER_GUESS>-mac \
-  --port  <SUGGESTED_PORT> \
-  --user  <LAPTOP_USER_GUESS> \
+  --alias     <RU>-mac \
+  --namespace <RU> \                # 由 RU 稳定推导反向端口；省略 --port
+  --user      <LAPTOP_USER_GUESS> \ # 笔记本登录用户名（与 RU 不同）
   [--identity <DEFAULT_IDENTITY>] \
   [--gen-key]   # 当 DEFAULT_IDENTITY 为空（机器上没有现成密钥）时加上
 ```
 
-从输出中提取：`ALIAS`（服务器端别名，例如 `my-mac`）、`PORT`、`PUBKEY`。若 `PUBKEY` 为空，请加 `--gen-key` 重跑。
+传入 `--namespace <RU>` 并**省略 `--port`**，让端口跟随*已确认*的 `RU`（而不是确认前那个从猜测哈希出来的 `SUGGESTED_PORT`）。`setup-tunnel.sh` 会把 `RU` 哈希到临时端口下界以下的一个稳定 `.22` 槽位，再探测空闲端口。从输出中提取：`ALIAS`（`<RU>-mac`）、`PORT`（推导出的稳定端口——笔记本命令里用它）、`PUBKEY`。若 `PUBKEY` 为空，请加 `--gen-key` 重跑。
 
 ### 1b. 询问用户如何连接到本服务器
 
@@ -152,6 +166,7 @@ Phase 2 中，`laptop-setup.sh` 会确认 `<PORT>` 上的现有监听是否真�
   `ssh -o ClearAllForwardings=yes <host>`，或手动删除旧的 `RemoteForward` 行。
 - **setup 开始前出现 `remote port forwarding failed for listen port <PORT>`** → 使用了旧命令模板，fetch 脚本时没有 `-o ClearAllForwardings=yes`，SSH 在下载脚本前就尝试申请已有 `RemoteForward`。更新/重新安装本 skill 后重新运行 `$remote-harness`；新命令的 fetch 行会禁用转发。
 - **远端端口已监听但 alias 连不回笔记本** → 另一个或陈旧的隧道占用了该端口。当前 `laptop-setup.sh` 会自动尝试下一个空闲端口，并同步更新两端配置。若找不到或无法配置空闲端口，再关闭对应 SSH 会话；若它是多路复用 master，则运行 `ssh -O exit <host>`，然后重试。
+- **多个人共用同一个服务器账号** → 每个人在 Step 0a 确认一个各自不同的命名空间 `RU`，于是各自拿到自己的 `<RU>-mac` 别名和一个由 `RU` 哈希出来的反向端口——隧道彼此独立，`ssh <RU>-mac` 永远连回本人自己的笔记本。若两个人不小心确认了**相同**的 `RU`（例如都接受了某个通用猜测），他们的别名/端口就会冲突；重跑 Step 0a 并给出不同的命名空间即可。服务器端 `~/.ssh/config` 的写入用 `flock` 串行化，因此并发的 setup 不会互相覆盖对方的托管块。
 - **挂载失败**，`STATUS=failed` → 隧道可能尚未就绪；等待几秒后重试脚本。或在服务器上检查 `BOX_ALIAS` 是否为正确别名（在服务器上执行 `ssh <ALIAS> hostname`）。
 - **服务器未安装 sshfs** → 脚本会在用户安装后提示重试（隧道保持不变；无需从 Step 0 重新开始）。
 - **启动代理时出现密码提示** → 密钥错误或笔记本上的 sshd 未运行。

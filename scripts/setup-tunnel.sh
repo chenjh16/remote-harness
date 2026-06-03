@@ -19,19 +19,67 @@ ssh_config_value() {
   esac
 }
 
-ALIAS="" PORT="" LUSER="" IDENTITY="" GEN_KEY=0
+# Serialize the read-modify-write of the SHARED ~/.ssh/config — a shared box account may have
+# several real users running remote-harness at once, and a lost update could cross-wire or drop a
+# managed alias. Best-effort: flock if present (Linux/util-linux), else an atomic mkdir spin-lock,
+# else proceed unlocked. Never aborts setup on a lock failure.
+LOCK="$HOME/.ssh/.rh-config.lock"
+rh_lock() {
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOCK" 2>/dev/null && flock -w 10 9 2>/dev/null || true
+  else
+    _n=0; while ! mkdir "$LOCK.d" 2>/dev/null; do _n=$((_n+1)); [ "$_n" -ge 50 ] && break; sleep 0.2 2>/dev/null || sleep 1; done
+  fi
+}
+rh_unlock() {
+  if command -v flock >/dev/null 2>&1; then flock -u 9 2>/dev/null || true; exec 9>&- 2>/dev/null || true
+  else rmdir "$LOCK.d" 2>/dev/null || true; fi
+}
+
+# Listening TCP ports on THIS box (ss -> netstat [GNU/BSD] -> lsof), for free-port probing.
+listening_ports() {
+  { if   command -v ss      >/dev/null 2>&1; then ss -tlnH 2>/dev/null | awk '{print $4}'
+    elif command -v netstat >/dev/null 2>&1; then netstat -an 2>/dev/null | awk '/^tcp/ && /LISTEN/{print $4}'
+    elif command -v lsof    >/dev/null 2>&1; then lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print $9}'
+    fi; } | sed -E 's/.*[:.]([0-9]+)$/\1/' | grep -E '^[0-9]+$' | sort -un
+}
+
+ALIAS="" PORT="" LUSER="" IDENTITY="" GEN_KEY=0 NAMESPACE=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --alias)    need_arg "$1" "${2-}"; ALIAS="$2"; shift 2;;
-    --port)     need_arg "$1" "${2-}"; PORT="$2"; shift 2;;
-    --user)     need_arg "$1" "${2-}"; LUSER="$2"; shift 2;;
-    --identity) need_arg "$1" "${2-}"; IDENTITY="$2"; shift 2;;
-    --gen-key)  GEN_KEY=1; shift;;
+    --alias)     need_arg "$1" "${2-}"; ALIAS="$2"; shift 2;;
+    --port)      need_arg "$1" "${2-}"; PORT="$2"; shift 2;;
+    --namespace) need_arg "$1" "${2-}"; NAMESPACE="$2"; shift 2;;   # real-user namespace -> stable port when --port omitted
+    --user)      need_arg "$1" "${2-}"; LUSER="$2"; shift 2;;
+    --identity)  need_arg "$1" "${2-}"; IDENTITY="$2"; shift 2;;
+    --gen-key)   GEN_KEY=1; shift;;
     *) die "unknown argument: $1";;
   esac
 done
-[ -n "$ALIAS" ] && [ -n "$PORT" ] && [ -n "$LUSER" ] \
-  || die "usage: setup-tunnel.sh --alias NAME --port PORT --user LAPTOP_USER [--identity KEYFILE] [--gen-key]"
+[ -n "$ALIAS" ] && [ -n "$LUSER" ] \
+  || die "usage: setup-tunnel.sh --alias NAME --user LAPTOP_USER (--port PORT | --namespace RU) [--identity KEYFILE] [--gen-key]"
+
+# Derive a STABLE reverse port from the confirmed real-user namespace when no explicit --port was
+# given: hash -> a ".22" slot in [20022,29922] below the ephemeral floor, then probe upward for a
+# free slot. Same slot formula as detect.sh's SUGGESTED_PORT — KEEP THEM IN SYNC.
+if [ -z "$PORT" ]; then
+  [ -n "$NAMESPACE" ] || die "need --port PORT or --namespace RU"
+  _inuse="$(listening_ports)"
+  _low=$(awk '{print $1}' /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null)
+  [ -z "$_low" ] && _low=$(sysctl -n net.inet.ip.portrange.first 2>/dev/null)
+  _low=${_low:-32768}
+  if [ "$_low" -gt 29922 ]; then
+    _bb=$(( $(printf '%s' "$NAMESPACE" | cksum | awk '{print $1}') % 100 ))
+    _i=0
+    while [ "$_i" -lt 100 ]; do
+      _p=$(( 20022 + ((_bb + _i) % 100) * 100 ))
+      printf '%s\n' "$_inuse" | grep -qx "$_p" || { PORT="$_p"; break; }
+      _i=$(( _i + 1 ))
+    done
+  fi
+  [ -n "$PORT" ] || die "could not derive a free stable port for namespace '$NAMESPACE'"
+  note "Derived stable reverse port $PORT for namespace '$NAMESPACE'."
+fi
 printf '%s' "$PORT" | grep -qE '^[0-9]+$' || die "port must be numeric: $PORT"
 [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "port out of range: $PORT"
 printf '%s' "$ALIAS" | grep -qE '^[A-Za-z0-9._-]+$' || die "alias has unsafe characters: $ALIAS"
@@ -67,6 +115,7 @@ fi
 # --- write an idempotent managed block -------------------------------------
 BEGIN="# >>> remote-harness:${ALIAS} >>> (managed; edits here are overwritten)"
 END="# <<< remote-harness:${ALIAS} <<<"
+rh_lock   # serialize the shared-config edit below; rh_unlock after the chmod
 cp "$CFG" "$CFG.rh-bak.$(date +%Y%m%d%H%M%S 2>/dev/null || echo bak)" 2>/dev/null || true
 
 tmp="$(mktemp)"
@@ -99,6 +148,7 @@ awk -v b="$BEGIN" -v e="$END" '
 } > "$CFG"
 rm -f "$tmp"
 chmod 600 "$CFG" 2>/dev/null || true
+rh_unlock
 
 emit STATUS configured
 emit ALIAS "$ALIAS"

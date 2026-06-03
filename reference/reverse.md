@@ -20,31 +20,57 @@ this box:  ssh <BOX_ALIAS>          → 127.0.0.1:<PORT> → (tunnel) → laptop
 The laptop just needs to reconnect with `RemoteForward` in its config. The `BOX_ALIAS` (e.g.
 `my-mac`) is the alias this box uses to reach the laptop.
 
-## Step 0 — Preflight (one call, one decision)
+## Step 0 — Identify the real user (namespace), then preflight
+
+A box account may be **shared by several people**, each running remote-harness to their own laptop.
+To stop their reverse tunnels from colliding — or, worse, cross-wiring `ssh <alias>` to the WRONG
+laptop — we namespace the tunnel (ssh alias + reverse port) per **real user**. So first identify that
+namespace, then preflight against it.
+
+### 0a. Confirm the namespace (`RU`) — ask, don't infer
 
 ```bash
-"$RH/scripts/preflight.sh" --no-list   # --no-list: defer project scan to §1b.5 (only after tunnel is confirmed up)
+"$RH/scripts/detect.sh"   # REALUSER_GUESS/SOURCE/CANDIDATES, SUGGESTED_PORT (RU-stable),
+                          # LAPTOP_USER_GUESS, DEFAULT_IDENTITY, SSHD_TCP_FORWARDING
+```
+
+`REALUSER_GUESS` is a best-effort guess of who you are on this account, derived (in priority order)
+from the public-key comment THIS session logged in with (needs sshd `ExposeAuthInfo yes`, usually
+off), the first `~/<name>/…` component of the launch dir (the soft per-user convention), or an
+authorized_keys comment. `REALUSER_SOURCE` says which fired; `REALUSER_CANDIDATES` lists the others.
+
+**AskUserQuestion (Confirm, don't infer):** "在这个（可能共享的）账号上，用什么名字给你的隧道做命名空间？"
+— pre-fill `REALUSER_GUESS`, offer `REALUSER_CANDIDATES` + Other/free-form. Call the answer **`RU`**.
+Your box-side alias is **`<RU>-mac`**; your reverse port is derived stably from `RU`. If
+`REALUSER_GUESS` is empty (e.g. you launched straight from `$HOME`, or the dir is a generic
+`work`/`src`), you MUST ask outright — there is no safe default.
+
+### 0b. Preflight against your namespace
+
+```bash
+"$RH/scripts/preflight.sh" --alias <RU>-mac --no-list   # --no-list: defer project scan to §1b.5
 ```
 
 Read `PREFLIGHT`:
 
-- **`ok`** → tunnel already works (`TUNNEL_ALIAS`, `TUNNEL_PORT`, `LAPTOP_HOSTNAME`).
-  The tunnel is up — emit the laptop command immediately (see § emit-only variant).
+- **`ok`** → YOUR namespaced tunnel (`<RU>-mac`) already reaches your laptop (`TUNNEL_ALIAS`,
+  `TUNNEL_PORT`, `LAPTOP_HOSTNAME`). Nothing to build — emit the laptop command immediately (see
+  § emit-only variant). This is ALSO the **same-user / another-project** path: one tunnel+port carries
+  any number of sshfs mounts, so a second project just remounts over the existing tunnel — no new port.
 - **`blocked`** — handle `BLOCKED_STEP`:
-  - `tunnel` → no working back-channel → go to **Step 1** (below).
+  - `tunnel` → your `<RU>-mac` tunnel isn't up yet → go to **Step 1** (below).
   - `sshfs` → sshfs/FUSE missing: show `REMEDY`, AskUserQuestion ("installed? ✅/⚠️"),
     re-run on ✅; on ⚠️ read the problem and help. Loop until resolved.
+
+Passing `--alias <RU>-mac` makes preflight consider ONLY your own tunnel — on a shared account it must
+never reuse another user's loopback alias and silently mount the wrong laptop.
 
 `PROJECT_DIR` / `PROJECT_DIR_EMPTY` feed the **box mountpoint** decision in Step 1b.5 (they don't
 gate proceeding). The mountpoint must be empty because sshfs hides existing files.
 
 ## Step 1 — Build the tunnel and hand over to the laptop
 
-### 1a. Set up the box side
-
-```bash
-"$RH/scripts/detect.sh"   # get SUGGESTED_PORT, LAPTOP_USER_GUESS, DEFAULT_IDENTITY
-```
+### 1a. Set up the box side (detect already ran in Step 0a)
 
 If `SSHD_TCP_FORWARDING=restricted-needs-attention`: warn that this box's sshd blocks reverse
 forwarding (`AllowTcpForwarding no|local`) — user must set it to `yes`/`remote` + restart sshd.
@@ -55,15 +81,18 @@ key to authorize on the laptop, and the Phase-5 login later fails with a passwor
 
 ```bash
 "$RH/scripts/setup-tunnel.sh" \
-  --alias <LAPTOP_USER_GUESS>-mac \
-  --port  <SUGGESTED_PORT> \
-  --user  <LAPTOP_USER_GUESS> \
+  --alias     <RU>-mac \
+  --namespace <RU> \                # derive the STABLE reverse port from RU; omit --port
+  --user      <LAPTOP_USER_GUESS> \ # the laptop login user (distinct from RU)
   [--identity <DEFAULT_IDENTITY>] \
   [--gen-key]   # add this when DEFAULT_IDENTITY is empty (no existing box key)
 ```
 
-Capture from output: `ALIAS` (box-side alias, e.g. `my-mac`), `PORT`, `PUBKEY`. If `PUBKEY` is
-empty, re-run with `--gen-key`.
+Pass `--namespace <RU>` and **omit `--port`** so the port follows the *confirmed* `RU` (not the
+pre-confirmation `SUGGESTED_PORT`, which was hashed from the guess). `setup-tunnel.sh` hashes `RU` to
+a stable `.22` slot below the ephemeral floor and probes for a free one. Capture from output: `ALIAS`
+(`<RU>-mac`), `PORT` (the derived stable port — use it in the laptop command), `PUBKEY`. If `PUBKEY`
+is empty, re-run with `--gen-key`.
 
 ### 1b. Ask how the user connects to this box
 
@@ -199,6 +228,12 @@ as `<ALIAS>` and derive `<CONNECT>` / `<HOST>` from the existing alias or re-ask
   port. Current `laptop-setup.sh` tries the next free port automatically and updates both sides. If
   it cannot find/configure a free port, close that SSH session, or if it is a multiplexed master run
   `ssh -O exit <host>`, then rerun.
+- **Several people sharing one box account** → each confirms a distinct namespace `RU` in Step 0a, so
+  each gets their own `<RU>-mac` alias and a reverse port hashed from `RU` — tunnels stay separate and
+  `ssh <RU>-mac` always reaches that person's own laptop. If two people accidentally confirm the SAME
+  `RU` (e.g. both accepted a generic guess), their alias/port collide; re-run Step 0a and give
+  distinct namespaces. The box-side `~/.ssh/config` edit is `flock`-serialized so concurrent setups
+  don't clobber each other's managed block.
 - **Mount fails** with `STATUS=failed` → tunnel may not be up yet; wait a few seconds and retry
   the script. Or check `BOX_ALIAS` is the right alias on the box (`ssh <ALIAS> hostname` from box).
 - **sshfs not installed on box** → the script offers to retry after the user installs it (the

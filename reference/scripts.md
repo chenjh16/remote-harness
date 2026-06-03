@@ -9,15 +9,25 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
 ```
 
 - `"$RH/scripts/preflight.sh"` — one-shot check; emits `PREFLIGHT=ok|blocked` + `BLOCKED_STEP`/
-  `ERROR`/`REMEDY` + `DIRECTION`. Reverse (default): checks the tunnel + local sshfs/FUSE. Forward:
-  `--direction forward [--server '<via>']` checks local sshfs/FUSE (+ server reachability) and lists
-  the server's projects. Run this first.
-- `"$RH/scripts/detect.sh"` — read-only probe: `SUGGESTED_PORT`, `LAPTOP_USER_GUESS`,
-  `DEFAULT_IDENTITY`, `SSHD_TCP_FORWARDING`, `ON_REMOTE`. Used when building the tunnel.
+  `ERROR`/`REMEDY` + `DIRECTION`. Reverse (default): checks the tunnel + local sshfs/FUSE. Pass
+  `--alias <RU>-mac` to reuse ONLY that real user's namespaced tunnel (on a shared box account,
+  without it preflight would scan every loopback alias and could latch onto another user's tunnel).
+  Forward: `--direction forward [--server '<via>']` checks local sshfs/FUSE (+ server reachability)
+  and lists the server's projects. Run this first.
+- `"$RH/scripts/detect.sh"` — read-only probe: `REALUSER_GUESS`/`REALUSER_SOURCE`
+  (`authkey|cwd|authorized_keys|none`)/`REALUSER_CANDIDATES` (the per-real-user namespace guess on a
+  shared box account — confirm before use), `SUGGESTED_PORT` (hashed from `REALUSER_GUESS` to a
+  stable `.22` slot so different users don't collide; legacy "highest free `.22`" when no namespace),
+  `LAPTOP_USER_GUESS`, `DEFAULT_IDENTITY`, `SSHD_TCP_FORWARDING`, `ON_REMOTE`. Used when building the
+  tunnel.
 - `"$RH/scripts/setup-tunnel.sh"` — (reverse) write the box-side `ssh` alias
-  (`BOX_ALIAS → 127.0.0.1:PORT`). Emits `ALIAS`, `PORT`, `PUBKEY`, `REMOTEFORWARD_LINE`. Idempotent.
-  Pass `--gen-key` when the box has no SSH key (empty `DEFAULT_IDENTITY`) so it creates an ed25519 key
-  and `PUBKEY` is non-empty.
+  (`<RU>-mac → 127.0.0.1:PORT`). Emits `ALIAS`, `PORT`, `PUBKEY`, `REMOTEFORWARD_LINE`. Idempotent;
+  the shared `~/.ssh/config` edit is `flock`-serialized so concurrent runs on a shared account don't
+  clobber each other. Give EITHER `--port <PORT>` OR `--namespace <RU>`: with `--namespace` (and no
+  `--port`) it derives the stable port from `RU` the same way `detect.sh` does and probes for a free
+  slot — pass the confirmed `RU` so the port follows it, not the pre-confirmation guess. Pass
+  `--gen-key` when the box has no SSH key (empty `DEFAULT_IDENTITY`) so it creates an ed25519 key and
+  `PUBKEY` is non-empty.
 - `"$RH/scripts/connect-guesses.sh"` — (reverse) guess how the laptop reaches this box.
 - `"$RH/scripts/check-tunnel.sh"` — (reverse) verify listener + real ssh login through the tunnel
   (`--port <PORT>` to check a specific forwarded port).

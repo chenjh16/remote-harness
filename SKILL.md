@@ -41,10 +41,12 @@ channel your agent runtime exposes — never skip a required confirmation, and n
 unanswered decision.
 
 > **Confirm, don't infer (REQUIRED).** Detected values — direction, the project/codebase to develop,
-> and the mountpoint where the agent will launch — are only DEFAULTS that PRE-FILL a question, never
-> final decisions. You MUST get the user's explicit answer for EACH of these three before emitting
-> the final command. Auto-detection (e.g. `SSH_CONNECTION` → direction, cwd → mountpoint) only
-> pre-selects the likely option; it must NOT skip the question. Never silently assume the user's intent.
+> the mountpoint where the agent will launch, and (reverse, where a box account may be shared) the
+> per-real-user **namespace `RU`** that names your reverse tunnel — are only DEFAULTS that PRE-FILL a
+> question, never final decisions. You MUST get the user's explicit answer for EACH before emitting
+> the final command. Auto-detection (e.g. `SSH_CONNECTION` → direction, cwd → mountpoint,
+> `REALUSER_GUESS` → namespace) only pre-selects the likely option; it must NOT skip the question.
+> Never silently assume the user's intent.
 
 > **Cross-agent question tool policy:** wherever the steps say "**AskUserQuestion**", use the
 > runtime's structured user-input tool when one is available. Claude Code: use `AskUserQuestion`.

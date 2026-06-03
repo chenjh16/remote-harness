@@ -11,14 +11,21 @@ RH="${RH_HOME:-$HOME/.remote-harness}"
 ```
 
 - `"$RH/scripts/preflight.sh"` — 一次性检查；输出 `PREFLIGHT=ok|blocked` 以及 `BLOCKED_STEP`/
-  `ERROR`/`REMEDY` + `DIRECTION`。反向模式（默认）：检查隧道及本地 sshfs/FUSE。正向模式：
-  `--direction forward [--server '<via>']` 检查本地 sshfs/FUSE（及服务器可达性）并列出服务器上的项目。
-  请首先运行此脚本。
-- `"$RH/scripts/detect.sh"` — 只读探测：`SUGGESTED_PORT`、`LAPTOP_USER_GUESS`、
-  `DEFAULT_IDENTITY`、`SSHD_TCP_FORWARDING`、`ON_REMOTE`。用于构建隧道时读取。
+  `ERROR`/`REMEDY` + `DIRECTION`。反向模式（默认）：检查隧道及本地 sshfs/FUSE。传入
+  `--alias <RU>-mac` 让它只复用该真实用户的命名空间隧道（共享账号上若不传，预检会扫描所有回环别名，
+  可能误连到别人的隧道）。正向模式：`--direction forward [--server '<via>']` 检查本地 sshfs/FUSE
+  （及服务器可达性）并列出服务器上的项目。请首先运行此脚本。
+- `"$RH/scripts/detect.sh"` — 只读探测：`REALUSER_GUESS`/`REALUSER_SOURCE`
+  （`authkey|cwd|authorized_keys|none`）/`REALUSER_CANDIDATES`（共享账号上按真实用户的命名空间猜测——
+  使用前先确认）、`SUGGESTED_PORT`（由 `REALUSER_GUESS` 哈希到稳定 `.22` 槽位，避免不同用户撞端口；
+  无命名空间时退回"最高空闲 `.22`"）、`LAPTOP_USER_GUESS`、`DEFAULT_IDENTITY`、`SSHD_TCP_FORWARDING`、
+  `ON_REMOTE`。用于构建隧道时读取。
 - `"$RH/scripts/setup-tunnel.sh"` — （反向）在远端机器上写入 `ssh` 别名
-  （`BOX_ALIAS → 127.0.0.1:PORT`）。输出 `ALIAS`、`PORT`、`PUBKEY`、`REMOTEFORWARD_LINE`。幂等操作。
-  当机器上没有 SSH 密钥（`DEFAULT_IDENTITY` 为空）时，传入 `--gen-key` 生成 ed25519 密钥，使 `PUBKEY` 非空。
+  （`<RU>-mac → 127.0.0.1:PORT`）。输出 `ALIAS`、`PORT`、`PUBKEY`、`REMOTEFORWARD_LINE`。幂等操作；
+  对共享 `~/.ssh/config` 的写入用 `flock` 串行化，使共享账号上的并发运行不互相覆盖。`--port <PORT>`
+  与 `--namespace <RU>` 二选一：给 `--namespace`（且不给 `--port`）时，它按与 `detect.sh` 相同的方式
+  从 `RU` 推导稳定端口并探测空闲槽位——传入已确认的 `RU`，使端口跟随它而非确认前的猜测。当机器上没有
+  SSH 密钥（`DEFAULT_IDENTITY` 为空）时，传入 `--gen-key` 生成 ed25519 密钥，使 `PUBKEY` 非空。
 - `"$RH/scripts/connect-guesses.sh"` — （反向）猜测笔记本电脑访问此机器的方式。
 - `"$RH/scripts/check-tunnel.sh"` — （反向）验证监听器并通过隧道进行真实 ssh 登录测试（`--port <PORT>` 检查指定的转发端口）。
 - `"$RH/scripts/server-guesses.sh"` — （正向）从 `~/.ssh/config` 非回环别名、known_hosts 及近期历史中

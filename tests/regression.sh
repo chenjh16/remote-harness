@@ -320,6 +320,55 @@ assert_grep "$tmp/preflight-missing.err" "missing value for --direction" "prefli
 assert_grep "$ROOT/scripts/laptop-setup.sh" "ssh -o ClearAllForwardings=yes <CONNECT>" "laptop template disables forwarding during fetch"
 assert_grep "$ROOT/reference/reverse.md" "ssh -o ClearAllForwardings=yes <CONNECT_ARGS>" "reverse docs disable forwarding during fetch"
 
+# --- detect.sh: real-user (RU) namespace + stable hashed reverse port -------
+# Neutralize any ambient ExposeAuthInfo vars so these tests are hermetic (this very environment may
+# have SSH_USER_AUTH set); each test re-sets only the var it exercises.
+unset SSH_USER_AUTH SSH_AUTH_INFO_0 2>/dev/null || true
+ru_home="$tmp/ru-home"
+mkdir -p "$ru_home/alice/proj" "$ru_home/work/proj"
+det_alice="$(HOME="$ru_home" bash -c 'cd "$0/alice/proj" && exec bash "$1"' "$ru_home" "$ROOT/scripts/detect.sh" 2>/dev/null)"
+printf '%s\n' "$det_alice" | grep -q '^REALUSER_GUESS=alice$'  || fail "detect: RU from launch dir"
+printf '%s\n' "$det_alice" | grep -q '^REALUSER_SOURCE=cwd$'   || fail "detect: RU source = cwd"
+det_port="$(printf '%s\n' "$det_alice" | awk -F= '/^SUGGESTED_PORT=/{print $2}')"
+case "$det_port" in *22) ;; *) fail "detect: hashed port should end in 22 (got '$det_port')";; esac
+# a generic workspace dir must NOT be treated as a real-user namespace
+det_work="$(HOME="$ru_home" bash -c 'cd "$0/work/proj" && exec bash "$1"' "$ru_home" "$ROOT/scripts/detect.sh" 2>/dev/null)"
+printf '%s\n' "$det_work" | grep -q '^REALUSER_SOURCE=none$' || fail "detect: generic dir wrongly used as RU"
+# the documented OpenSSH mechanism: ExposeAuthInfo writes a temp file and $SSH_USER_AUTH holds its
+# PATH (not the content). The key's base64 blob may contain '/' and '+' — extraction must survive it.
+sua_home="$tmp/sua-home"; mkdir -p "$sua_home/.ssh"
+realkey='AAAAC3NzaC1lZDI1NTE5AAAAIIummE1+Hebk82oZoj1VlkxDjhrBRqqvrQvV0r/y9Uuy'
+printf 'ssh-ed25519 %s chenjh@ifm-bz-00\n' "$realkey" > "$sua_home/.ssh/authorized_keys"
+sua_file="$tmp/sshauth.test"
+printf 'publickey ssh-ed25519 %s\n' "$realkey" > "$sua_file"
+det_sua="$(HOME="$sua_home" SSH_USER_AUTH="$sua_file" bash -c 'cd "$0" && exec bash "$1"' "$sua_home" "$ROOT/scripts/detect.sh" 2>/dev/null)"
+printf '%s\n' "$det_sua" | grep -q '^REALUSER_GUESS=chenjh_ifm-bz-00$'             || fail "detect: SSH_USER_AUTH file -> full-comment RU (with '/' in key)"
+printf '%s\n' "$det_sua" | grep -q '^REALUSER_SOURCE=authkey$'                     || fail "detect: SSH_USER_AUTH source"
+printf '%s\n' "$det_sua" | grep -q '^REALUSER_CANDIDATES=chenjh_ifm-bz-00,chenjh$' || fail "detect: SSH_USER_AUTH candidates"
+# fallback path: some setups expose the lines directly in $SSH_AUTH_INFO_0
+ak_home="$tmp/ak-home"; mkdir -p "$ak_home/.ssh"
+printf 'ssh-ed25519 AAAATESTKEY alice@macbook\n' > "$ak_home/.ssh/authorized_keys"
+det_ak="$(HOME="$ak_home" SSH_AUTH_INFO_0='publickey ssh-ed25519 AAAATESTKEY' bash -c 'cd "$0" && exec bash "$1"' "$ak_home" "$ROOT/scripts/detect.sh" 2>/dev/null)"
+printf '%s\n' "$det_ak" | grep -q '^REALUSER_GUESS=alice_macbook$'         || fail "detect: SSH_AUTH_INFO_0 fallback full comment"
+printf '%s\n' "$det_ak" | grep -q '^REALUSER_CANDIDATES=alice_macbook,alice$' || fail "detect: fallback full + local-part candidates"
+
+# --- setup-tunnel.sh: --namespace derives the SAME stable port as detect.sh -
+st_home="$tmp/st-home"; mkdir -p "$st_home/.ssh"
+st_out="$(HOME="$st_home" bash "$ROOT/scripts/setup-tunnel.sh" --alias alice-mac --user alice --namespace alice --gen-key 2>/dev/null)"
+st_port="$(printf '%s\n' "$st_out" | awk -F= '/^PORT=/{print $2}')"
+assert_eq "setup-tunnel --namespace port matches detect" "$st_port" "$det_port"
+assert_grep "$st_home/.ssh/config" "Host alice-mac" "namespaced managed alias"
+# explicit --port still wins (the runtime port-switch path)
+st_home2="$tmp/st-home2"; mkdir -p "$st_home2/.ssh"
+st_out2="$(HOME="$st_home2" bash "$ROOT/scripts/setup-tunnel.sh" --alias bob-mac --user bob --port 20122 --gen-key 2>/dev/null)"
+assert_eq "setup-tunnel explicit --port" "$(printf '%s\n' "$st_out2" | awk -F= '/^PORT=/{print $2}')" "20122"
+# neither --port nor --namespace -> hard error
+st_home3="$tmp/st-home3"; mkdir -p "$st_home3/.ssh"
+if HOME="$st_home3" bash "$ROOT/scripts/setup-tunnel.sh" --alias x-mac --user x >/dev/null 2>"$tmp/st-noport.err"; then
+  fail "setup-tunnel accepted neither --port nor --namespace"
+fi
+assert_grep "$tmp/st-noport.err" "need --port PORT or --namespace RU" "setup-tunnel requires port or namespace"
+
 while IFS= read -r f; do
   [ -f "${f%.md}.cn.md" ] || fail "missing Chinese doc counterpart for $f"
 done < <(git -C "$ROOT" ls-files --cached --others --exclude-standard '*.md' | grep -v '^README.md$' | grep -v '^CLAUDE.md$' | grep -v '\.cn\.md$')

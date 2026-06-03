@@ -79,6 +79,26 @@ else printf 'error: missing _common.sh next to %s — re-copy the full command\n
 
 # ---- auto-cleanup on exit/disconnect ---------------------------------------
 TUNNEL_PID=""; MOUNTED=0; CLEANED=0; RULE_INJECTED=0
+
+# Path to the per-(box,port) pid file recording WHO owns the reverse tunnel (the live `ssh -N` pid),
+# so the LAST session out can drop it even if it didn't create it — same-user multi-project, where a
+# second session reuses the tunnel. Keyed by TARGET+PORT (evaluated at call time, after they're set).
+tunnel_state_path() {
+  printf '%s/.remote-harness/.tunnel-%s.pid' "$HOME" \
+    "$(printf '%s-%s' "${TARGET:-}" "${PORT:-}" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
+}
+# True if the box STILL has another sshfs mount riding this reverse tunnel (a different session's
+# '<BOX_ALIAS>:…' mount remains after we've unmounted ours). Best-effort: false on error, and on a
+# macOS/FUSE-T box (its mount source isn't '<alias>:path', so it can't be detected — the tunnel is
+# then dropped as before).
+tunnel_still_needed() {
+  [ -n "${BOX_ALIAS:-}" ] && [ -n "${TARGET:-}" ] || return 1
+  _cnt="$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 "$TARGET" \
+    "mount 2>/dev/null | grep -F -- $(sq "$BOX_ALIAS:") 2>/dev/null | grep -c -i fuse" 2>/dev/null)"
+  case "${_cnt:-0}" in *[!0-9]*) _cnt=0;; esac
+  [ "${_cnt:-0}" -gt 0 ]
+}
+
 cleanup() {
   [ "$CLEANED" = 1 ] && return 0
   CLEANED=1
@@ -95,7 +115,20 @@ cleanup() {
       "\"\${RH_HOME:-\$HOME/.remote-harness}/scripts/inject-rule.sh\" off $(sq "${LAUNCH_BASE:-claude}") $(sq "${REMOTE_MOUNTPOINT:-}")" >/dev/null 2>&1 \
       && ok "session-scoped rule + temp config removed" || true
   fi
-  [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
+  # Drop the reverse tunnel ONLY when no other session still rides it. Whoever exits LAST tears it
+  # down — via the creator's pid file (the live `ssh -N` pid persists as an orphan after an early
+  # creator exit, so killing that pid still closes the tunnel) — so an early exit by the creator no
+  # longer strands another project's mount. Runs for reusers too (their own TUNNEL_PID is empty).
+  if [ "$MOUNTED" = 1 ] || [ -n "$TUNNEL_PID" ]; then
+    if tunnel_still_needed; then
+      warn "another session's mount still uses this reverse tunnel — leaving it up"
+    else
+      _sp="$(tunnel_state_path)"; _pid="${TUNNEL_PID:-}"
+      [ -z "$_pid" ] && [ -f "$_sp" ] && _pid="$(cat "$_sp" 2>/dev/null)"
+      [ -n "$_pid" ] && kill "$_pid" 2>/dev/null || true
+      rm -f "$_sp" 2>/dev/null || true
+    fi
+  fi
 }
 
 # OS vars (OS/PLAT/IS_WSL) come from _common.sh.
@@ -465,6 +498,14 @@ while :; do
     break
   fi
 done
+
+# Record who owns the tunnel (the live `ssh -N` pid) so the LAST session out — which may be a
+# different, reusing session — can drop it cleanly. Only the creator writes it; reusers (which broke
+# out via tunnel_alias_up) have an empty TUNNEL_PID and rely on the creator's file.
+if [ -n "$TUNNEL_PID" ]; then
+  mkdir -p "$HOME/.remote-harness" 2>/dev/null || true
+  printf '%s\n' "$TUNNEL_PID" > "$(tunnel_state_path)" 2>/dev/null || true
+fi
 
 # ===========================================================================
 # Phase 3: Pick a project directory ON THIS LAPTOP

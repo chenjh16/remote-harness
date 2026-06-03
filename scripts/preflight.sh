@@ -99,9 +99,13 @@ fi
 emit DIRECTION reverse
 
 # ---- Step: reverse tunnel (the core gate) ----------------------------------
+# With an explicit --alias (the real user's <RU>-mac), reuse ONLY that namespaced tunnel: on a
+# SHARED box account, scanning every loopback alias could latch onto ANOTHER user's tunnel and mount
+# the WRONG laptop. Without --alias (single-user / back-compat) scan all loopback aliases as before.
 aliases=""
-[ -n "$PREF_ALIAS" ] && aliases="$PREF_ALIAS"
-if [ -f "$HOME/.ssh/config" ]; then
+if [ -n "$PREF_ALIAS" ]; then
+  aliases="$PREF_ALIAS"
+elif [ -f "$HOME/.ssh/config" ]; then
   for a in $(awk 'tolower($1)=="host"{h=$2} tolower($1)=="hostname" && ($2=="127.0.0.1"||$2=="localhost"){print h}' "$HOME/.ssh/config"); do
     case " $aliases " in *" $a "*) ;; *) aliases="$aliases $a";; esac
   done

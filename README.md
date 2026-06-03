@@ -126,10 +126,15 @@ remote-harness/
 │   ├── mount-project.sh inject-rule.sh list-projects.sh   # 两向复用
 ├── adapters/{codex,opencode}.md   # 各 Agent 的入口(只设置 --launch)
 ├── manage.sh                 # 安装 / --dev / --uninstall
+├── docs/design.md            # 设计文档(架构/分层/不变量;+ .cn.md)
+├── issues/issue1.md          # 共享账号命名空间隔离分析(+ .cn.md)
 ├── AGENTS.md (+ CLAUDE.md 软链)    # 给「开发本仓库」的 Agent 的指南
 └── README.md
 ```
 
+> **设计文档**:想了解整体架构、四层结构与设计决策,见 [`docs/design.md`](docs/design.md)(中文版
+> [`docs/design.cn.md`](docs/design.cn.md))。
+>
 > **文档约定**:除 `README.md`(本文,内联双语)外,所有 `*.md` 都配一份中文 `*.cn.md`。详见 `AGENTS.md`。
 
 ### 安全与隐私
@@ -137,6 +142,9 @@ remote-harness/
 - ssh 配置改动前会备份;反向隧道别名用独立的 per-alias `known_hosts`(正向别名使用默认 known_hosts)。
 - 反向隧道用 `RemoteForward <端口> 127.0.0.1:22`(仅回环);多用户盒子上同机其他用户能到达该端口,
   但没有你的私钥无法认证。
+- 多人共用同一个服务器账号时,反向流程会按**真实用户**给隧道做命名空间隔离:每人确认一个 `RU`,
+  各自拿到 `<RU>-mac` 别名和一个由 `RU` 稳定哈希出来的端口,互不冲突,`ssh <RU>-mac` 永远连回本人
+  笔记本;同一个人开多个项目复用同一条隧道。共享 `~/.ssh/config` 的写入用 `flock` 串行化。
 - `--yolo` 会绕过审批,**仅在你明确要求时**才启用;opencode 的 `permission:allow` 只写进**本次会话**
   的配置,退出即清。
 - 注入的规则是**会话级**的(不写全局文件、不碰挂载的仓库);退出删除会话目录。
@@ -264,10 +272,15 @@ remote-harness/
 │   └── mount-project.sh inject-rule.sh list-projects.sh   # shared by both
 ├── adapters/{codex,opencode}.md
 ├── manage.sh
+├── docs/design.md                   # architecture / layering / invariants (+ .cn.md)
+├── issues/issue1.md                 # shared-account namespacing analysis (+ .cn.md)
 ├── AGENTS.md (+ CLAUDE.md symlink)   # guide for agents developing this repo
 └── README.md
 ```
 
+> **Design doc:** for the overall architecture, the four-layer structure, and the design decisions,
+> see [`docs/design.md`](docs/design.md) (Chinese: [`docs/design.cn.md`](docs/design.cn.md)).
+>
 > **Docs convention:** every `*.md` except `README.md` (this file, inline-bilingual) ships a Chinese
 > `*.cn.md` counterpart. See `AGENTS.md`.
 
@@ -276,6 +289,10 @@ remote-harness/
 - ssh config is backed up before edits; the reverse tunnel alias uses a dedicated per-alias `known_hosts` (forward uses the default).
 - The reverse tunnel binds loopback only (`RemoteForward <PORT> 127.0.0.1:22`); on a multi-user box
   other local users can reach that port but cannot authenticate without your private key.
+- When several people share one server account, the reverse flow namespaces the tunnel per **real
+  user**: each confirms an `RU`, gets its own `<RU>-mac` alias and a port hashed stably from `RU`, so
+  tunnels never collide and `ssh <RU>-mac` always reaches that person's own laptop; one person's
+  multiple projects reuse the same tunnel. The shared `~/.ssh/config` write is `flock`-serialized.
 - `--yolo` bypasses approvals and is applied **only when you ask**; opencode's `permission:allow`
   goes into the **per-session** config only and is gone on exit.
 - The injected rule is **session-scoped** (no global files, never touches the mounted repo); the
