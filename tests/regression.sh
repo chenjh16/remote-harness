@@ -49,21 +49,16 @@ host_count="$(awk '$1=="Host" && $2=="example-dev"{n++} END{print n+0}' "$CFG")"
 assert_eq "idempotent alias count" "$host_count" "1"
 assert_grep "$CFG" "    ProxyJump otherjump" "managed alias replacement"
 
-remote_root="$tmp/root with 'quote"
-mkdir -p "$remote_root/project"
-mkdir -p "$remote_root/sub/deeprepo/.git"   # depth-2 git repo — only scan_projects reaches it
-mkdir -p "$tmp/bin"
-cat > "$tmp/bin/ssh" <<'EOS'
-#!/usr/bin/env bash
-remote_cmd="${!#}"
-sh -c "$remote_cmd"
-EOS
-chmod +x "$tmp/bin/ssh"
-PATH="$tmp/bin:$PATH" "$ROOT/scripts/list-projects.sh" \
-  --via dummy --root "$remote_root" --limit 5 > "$tmp/projects.out"
-assert_grep "$tmp/projects.out" "PROJECT	$remote_root/project	-" "remote root quoting"
+for removed_script in preflight.sh detect.sh connect-guesses.sh server-guesses.sh list-projects.sh session-cache.sh; do
+  [ ! -e "$ROOT/scripts/$removed_script" ] || fail "removed script still exists: $removed_script"
+done
+if grep -R -E 'preflight|detect\.sh|connect-guesses|server-guesses|list-projects|session-cache|legacy|旧流程' \
+    "$ROOT/README.md" "$ROOT/AGENTS.md" "$ROOT/AGENTS.cn.md" "$ROOT/SKILL.md" "$ROOT/SKILL.cn.md" \
+    "$ROOT/reference" "$ROOT/docs" >/dev/null 2>&1; then
+  fail "docs still reference removed/legacy flows"
+fi
 
-assert_grep "$tmp/projects.out" "$remote_root/sub/deeprepo" "depth-2 git repo via scan_projects (skip_dir clobber regression)"
+mkdir -p "$tmp/bin"
 
 mkdir -p "$tmp/code" "$tmp/mount" "$tmp/home with 'quote/.codex" "$tmp/rh with 'quote"
 printf 'personal guidance\n' > "$tmp/home with 'quote/.codex/AGENTS.md"
@@ -152,7 +147,7 @@ assert_grep "$setup_cfg" "    IdentityFile /tmp/key" "setup-only identity"
 assert_grep "$setup_cfg" "    ProxyJump jumpbox" "setup-only proxyjump"
 assert_grep "$setup_cfg" "    RemoteForward 32022 127.0.0.1:22" "setup-only remote forward"
 assert_grep "$setup_cfg" "UserKnownHostsFile $setup_home/.remote-harness/.sessions/" "setup-only known_hosts under remote-harness"
-assert_grep "$setup_cfg" "ControlPath $setup_home/.remote-harness/.sessions/" "setup-only control path under remote-harness"
+assert_grep "$setup_cfg" "    ControlMaster no" "setup-only disables multiplexing"
 [ ! -e "$setup_home/.ssh/config" ] || fail "laptop-setup wrote ~/.ssh/config"
 [ ! -e "$setup_home/.ssh/authorized_keys" ] || fail "laptop-setup wrote ~/.ssh/authorized_keys"
 [ -z "$(find "$setup_home/.ssh" -name 'config.rh-bak.*' -print -quit 2>/dev/null)" ] || fail "laptop-setup created config.rh-bak"
@@ -633,64 +628,55 @@ if bash "$ROOT/scripts/mount-project.sh" --alias >/dev/null 2>"$tmp/mount-missin
   fail "mount-project accepted missing --alias value"
 fi
 assert_grep "$tmp/mount-missing.err" "missing value for --alias" "mount missing arg"
+assert_grep "$ROOT/scripts/mount-project.sh" 'SSH_BIN="$(command -v ssh' "mount-project uses absolute ssh binary for sshfs"
+assert_grep "$ROOT/scripts/mount-project.sh" "sshfs exited 0 but the mount did not become live" "mount-project verifies live mount after sshfs"
+
+canon_root="$tmp/canon-root"
+mkdir -p "$canon_root/physical/mount" "$tmp/canon-bin"
+ln -s "$canon_root/physical" "$canon_root/link"
+canon_mp="$canon_root/physical/mount"
+link_mp="$canon_root/link/mount"
+canon_state="$tmp/canon-mounted"
+canon_log="$tmp/canon-umount.log"
+: > "$canon_state"
+cat > "$tmp/canon-bin/mount" <<'EOS'
+#!/usr/bin/env bash
+[ -f "${CANON_STATE:?}" ] && printf 'fuse-t:/x on %s (nfs, nodev, nosuid)\n' "${CANON_MP:?}"
+EOS
+cat > "$tmp/canon-bin/umount" <<'EOS'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "${CANON_LOG:?}"
+[ "$1" = "${CANON_MP:?}" ] || exit 1
+rm -f "${CANON_STATE:?}"
+exit 0
+EOS
+cat > "$tmp/canon-bin/fusermount" <<'EOS'
+#!/usr/bin/env bash
+exit 1
+EOS
+cp "$tmp/canon-bin/fusermount" "$tmp/canon-bin/fusermount3"
+chmod +x "$tmp/canon-bin/mount" "$tmp/canon-bin/umount" "$tmp/canon-bin/fusermount" "$tmp/canon-bin/fusermount3"
+CANON_STATE="$canon_state" CANON_MP="$canon_mp" CANON_LOG="$canon_log" PATH="$tmp/canon-bin:$PATH" \
+  bash "$ROOT/scripts/mount-project.sh" --alias rlocal --unmount --mountpoint "$link_mp" > "$tmp/canon-unmount.out"
+assert_grep "$tmp/canon-unmount.out" "STATUS=unmounted" "mount-project unmount detects canonical path"
+assert_grep "$canon_log" "$canon_mp" "mount-project retries unmount with canonical path"
+
 if bash "$ROOT/scripts/check-tunnel.sh" --alias >/dev/null 2>"$tmp/check-missing.err"; then
   fail "check-tunnel accepted missing --alias value"
 fi
 assert_grep "$tmp/check-missing.err" "missing value for --alias" "check missing arg"
-if bash "$ROOT/scripts/preflight.sh" --direction >/dev/null 2>"$tmp/preflight-missing.err"; then
-  fail "preflight accepted missing --direction value"
-fi
-assert_grep "$tmp/preflight-missing.err" "missing value for --direction" "preflight missing arg"
 assert_grep "$ROOT/scripts/laptop-setup.sh" "ssh -o ClearAllForwardings=yes <CONNECT>" "laptop template disables forwarding during fetch"
-assert_grep "$ROOT/reference/reverse.md" "ssh -o ClearAllForwardings=yes <CONNECT_ARGS>" "reverse docs disable forwarding during fetch"
+assert_grep "$ROOT/reference/reverse.md" "ssh -n -o ClearAllForwardings=yes" "reverse docs disable forwarding during fetch"
 
-# --- detect.sh: real-user (RU) namespace + stable hashed reverse port -------
-# Neutralize any ambient ExposeAuthInfo vars so these tests are hermetic (this very environment may
-# have SSH_USER_AUTH set); each test re-sets only the var it exercises.
-unset SSH_USER_AUTH SSH_AUTH_INFO_0 2>/dev/null || true
-ru_home="$tmp/ru-home"
-mkdir -p "$ru_home/alice/proj" "$ru_home/work/proj"
-det_alice="$(HOME="$ru_home" bash -c 'cd "$0/alice/proj" && exec bash "$1"' "$ru_home" "$ROOT/scripts/detect.sh" 2>/dev/null)"
-printf '%s\n' "$det_alice" | grep -q '^REALUSER_GUESS=alice$'  || fail "detect: RU from launch dir"
-printf '%s\n' "$det_alice" | grep -q '^REALUSER_SOURCE=cwd$'   || fail "detect: RU source = cwd"
-det_port="$(printf '%s\n' "$det_alice" | awk -F= '/^SUGGESTED_PORT=/{print $2}')"
-case "$det_port" in *2) ;; *) fail "detect: hashed port should end in 2 (got '$det_port')";; esac
-{ [ "$det_port" -ge 20002 ] && [ "$det_port" -le 29992 ]; } || fail "detect: hashed port out of [20002,29992] (got '$det_port')"
-det_priv="$(HOME="$ru_home" SSH_CONNECTION='198.51.100.10 55555 203.0.113.7 2222' bash -c 'cd "$0/alice/proj" && exec bash "$1"' "$ru_home" "$ROOT/scripts/detect.sh" 2>/dev/null)"
-printf '%s\n' "$det_priv" | grep -q '^SERVER_IP=203.0.113.7$' || fail "detect: server IP missing"
-printf '%s\n' "$det_priv" | grep -q '^SERVER_PORT=2222$' || fail "detect: server port missing"
-if printf '%s\n' "$det_priv" | grep -q '^CLIENT_IP=' || printf '%s\n' "$det_priv" | grep -q '198.51.100.10'; then
-  fail "detect leaked local/client SSH_CONNECTION field"
-fi
-# a generic workspace dir must NOT be treated as a real-user namespace
-det_work="$(HOME="$ru_home" bash -c 'cd "$0/work/proj" && exec bash "$1"' "$ru_home" "$ROOT/scripts/detect.sh" 2>/dev/null)"
-printf '%s\n' "$det_work" | grep -q '^REALUSER_SOURCE=none$' || fail "detect: generic dir wrongly used as RU"
-# the documented OpenSSH mechanism: ExposeAuthInfo writes a temp file and $SSH_USER_AUTH holds its
-# PATH (not the content). The key's base64 blob may contain '/' and '+' — extraction must survive it.
-sua_home="$tmp/sua-home"; mkdir -p "$sua_home/.ssh"
-realkey='AAAAC3NzaC1lZDI1NTE5AAAAIIummE1+Hebk82oZoj1VlkxDjhrBRqqvrQvV0r/y9Uuy'
-printf 'ssh-ed25519 %s chenjh@ifm-bz-00\n' "$realkey" > "$sua_home/.ssh/authorized_keys"
-sua_file="$tmp/sshauth.test"
-printf 'publickey ssh-ed25519 %s\n' "$realkey" > "$sua_file"
-det_sua="$(HOME="$sua_home" SSH_USER_AUTH="$sua_file" bash -c 'cd "$0" && exec bash "$1"' "$sua_home" "$ROOT/scripts/detect.sh" 2>/dev/null)"
-printf '%s\n' "$det_sua" | grep -q '^REALUSER_GUESS=chenjh_ifm-bz-00$'             || fail "detect: SSH_USER_AUTH file -> full-comment RU (with '/' in key)"
-printf '%s\n' "$det_sua" | grep -q '^REALUSER_SOURCE=authkey$'                     || fail "detect: SSH_USER_AUTH source"
-printf '%s\n' "$det_sua" | grep -q '^REALUSER_CANDIDATES=chenjh_ifm-bz-00,chenjh$' || fail "detect: SSH_USER_AUTH candidates"
-# fallback path: some setups expose the lines directly in $SSH_AUTH_INFO_0
-ak_home="$tmp/ak-home"; mkdir -p "$ak_home/.ssh"
-printf 'ssh-ed25519 AAAATESTKEY alice@macbook\n' > "$ak_home/.ssh/authorized_keys"
-det_ak="$(HOME="$ak_home" SSH_AUTH_INFO_0='publickey ssh-ed25519 AAAATESTKEY' bash -c 'cd "$0" && exec bash "$1"' "$ak_home" "$ROOT/scripts/detect.sh" 2>/dev/null)"
-printf '%s\n' "$det_ak" | grep -q '^REALUSER_GUESS=alice_macbook$'         || fail "detect: SSH_AUTH_INFO_0 fallback full comment"
-printf '%s\n' "$det_ak" | grep -q '^REALUSER_CANDIDATES=alice_macbook,alice$' || fail "detect: fallback full + local-part candidates"
-
-# --- setup-tunnel.sh: --namespace derives the SAME stable port as detect.sh -
+# --- setup-tunnel.sh: --namespace derives a stable reverse port ----------------
 st_home="$tmp/st-home"; mkdir -p "$st_home/.ssh" "$tmp/st-session-ns"
 st_cfg_ns="$tmp/st-session-ns/ssh_config"
 st_out="$(HOME="$st_home" bash "$ROOT/scripts/setup-tunnel.sh" --config "$st_cfg_ns" --alias alice-mac --user alice --namespace alice --gen-key 2>/dev/null)"
 st_port="$(printf '%s\n' "$st_out" | awk -F= '/^PORT=/{print $2}')"
-assert_eq "setup-tunnel --namespace port matches detect" "$st_port" "$det_port"
+case "$st_port" in *2) ;; *) fail "setup-tunnel hashed port should end in 2 (got '$st_port')";; esac
+{ [ "$st_port" -ge 20002 ] && [ "$st_port" -le 29992 ]; } || fail "setup-tunnel hashed port out of [20002,29992] (got '$st_port')"
 assert_grep "$st_cfg_ns" "Host alice-mac" "namespaced managed alias"
-assert_grep "$st_cfg_ns" "ControlPath $tmp/st-session-ns/cm-%C" "setup-tunnel control path under session dir"
+assert_grep "$st_cfg_ns" "    ControlMaster no" "setup-tunnel disables multiplexing"
 [ ! -e "$st_home/.ssh/config" ] || fail "setup-tunnel namespace wrote ~/.ssh/config"
 [ ! -e "$st_home/.ssh/id_ed25519" ] || fail "setup-tunnel namespace generated key under ~/.ssh"
 [ -f "$st_home/.remote-harness/keys/id_ed25519" ] || fail "setup-tunnel namespace did not generate key under ~/.remote-harness/keys"
@@ -722,20 +708,6 @@ if HOME="$st_home3" bash "$ROOT/scripts/setup-tunnel.sh" --config "$tmp/st-nopor
   fail "setup-tunnel accepted neither --port nor --namespace"
 fi
 assert_grep "$tmp/st-noport.err" "need --port PORT or --namespace RU" "setup-tunnel requires port or namespace"
-
-# --- session-cache.sh: per-namespace connection memory round-trips ----------
-sc_rh="$tmp/sc-home/.remote-harness"
-RH_HOME="$sc_rh" bash "$ROOT/scripts/session-cache.sh" put 'chenjh@mbp.local' \
-  'LAST_PROJECT_DIR=/Users/substance/vibe/codex/OmniInput' \
-  'LAST_VIA=-p 2222 bytepilot@42.121.2.119' \
-  'LAST_LOGIN_USER=substance' >/dev/null
-sc_out="$(RH_HOME="$sc_rh" bash "$ROOT/scripts/session-cache.sh" get 'chenjh@mbp.local')"
-printf '%s\n' "$sc_out" | grep -qxF 'LAST_PROJECT_DIR=/Users/substance/vibe/codex/OmniInput' || fail "session-cache: project round-trip"
-printf '%s\n' "$sc_out" | grep -qxF 'LAST_VIA=-p 2222 bytepilot@42.121.2.119' || fail "session-cache: via with spaces"
-printf '%s\n' "$sc_out" | grep -qxF 'LAST_LOGIN_USER=substance' || fail "session-cache: login user"
-[ -z "$(RH_HOME="$sc_rh" bash "$ROOT/scripts/session-cache.sh" get 'nobody')" ] || fail "session-cache: absent key not empty"
-RH_HOME="$sc_rh" bash "$ROOT/scripts/session-cache.sh" put 'k' 'NOEQUALS' 'GOOD=1' >/dev/null
-[ "$(RH_HOME="$sc_rh" bash "$ROOT/scripts/session-cache.sh" get 'k')" = 'GOOD=1' ] || fail "session-cache: malformed pair not filtered"
 
 # --- inject-rule.sh: a pathological mountpoint ('..') must NOT escape $RH_HOME/.sessions/ ----
 ir_rh="$tmp/ir-home/.remote-harness"; ir_home="$tmp/ir-home2"

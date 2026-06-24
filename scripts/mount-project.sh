@@ -62,8 +62,19 @@ OS="$(uname -s 2>/dev/null || echo unknown)"
 SSHFS_BIN=""; for c in sshfs sshfs-fuse-t; do command -v "$c" >/dev/null 2>&1 && { SSHFS_BIN="$c"; break; }; done
 
 is_mounted() {
+  _mp="$1"
+  _canon="$(canon_mountpoint "$_mp")"
   if command -v mountpoint >/dev/null 2>&1; then mountpoint -q "$1" && return 0; fi
-  mount 2>/dev/null | grep -qF " $1 "
+  mount 2>/dev/null | grep -qF " $_mp " && return 0
+  [ "$_canon" != "$_mp" ] && mount 2>/dev/null | grep -qF " $_canon " && return 0
+  return 1
+}
+canon_mountpoint() {
+  _cm_path="$1"
+  _cm_dir="$(dirname "$_cm_path" 2>/dev/null || printf '.')"
+  _cm_base="$(basename "$_cm_path" 2>/dev/null || printf '')"
+  _cm_phys="$(cd "$_cm_dir" 2>/dev/null && pwd -P)" || { printf '%s' "$_cm_path"; return; }
+  printf '%s/%s' "$_cm_phys" "$_cm_base"
 }
 # Is the mount at $1 actually ALIVE (not a stale/dead sshfs endpoint left by a dropped tunnel)?
 mount_live() {
@@ -71,8 +82,22 @@ mount_live() {
   else ls "$1" >/dev/null 2>&1; fi
 }
 # Best-effort: the source (alias:/path) currently mounted at $1, from the mount table.
-mounted_source() { mount 2>/dev/null | awk -v mp=" $1 " 'index($0,mp){print $1; exit}'; }
-do_unmount() { fusermount -u "$1" 2>/dev/null || fusermount3 -u "$1" 2>/dev/null || umount "$1" 2>/dev/null || umount -l "$1" 2>/dev/null; }
+mounted_source() {
+  _ms_canon="$(canon_mountpoint "$1")"
+  mount 2>/dev/null | awk -v mp=" $1 " -v canon=" $_ms_canon " 'index($0,mp)||index($0,canon){print $1; exit}'
+}
+do_unmount() {
+  _du_canon="$(canon_mountpoint "$1")"
+  for _du_target in "$1" "$_du_canon"; do
+    [ -n "$_du_target" ] || continue
+    fusermount -u "$_du_target" 2>/dev/null && return 0
+    fusermount3 -u "$_du_target" 2>/dev/null && return 0
+    umount "$_du_target" 2>/dev/null && return 0
+    umount -l "$_du_target" 2>/dev/null && return 0
+    [ "$_du_target" = "$_du_canon" ] && break
+  done
+  return 1
+}
 
 if [ "$UNMOUNT" = 1 ]; then
   do_unmount "$MP" || true
@@ -139,8 +164,21 @@ case "$OS" in
   Darwin) SSHFS_OPTS="reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks";;
   *)      SSHFS_OPTS="reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks,idmap=user";;
 esac
-SSHFS_OPTS="$SSHFS_OPTS,ssh_command=ssh -F $SSH_CONFIG"
+SSH_BIN="$(command -v ssh 2>/dev/null || printf 'ssh')"
+SSHFS_OPTS="$SSHFS_OPTS,ssh_command=$SSH_BIN -F $SSH_CONFIG"
 if "$SSHFS_BIN" "$ALIAS:$RPATH" "$MP" -o "$SSHFS_OPTS" 2>"$err"; then
+  _ready=0
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if is_mounted "$MP" && mount_live "$MP"; then _ready=1; break; fi
+    sleep 1
+  done
+  if [ "$_ready" != 1 ]; then
+    emit STATUS failed
+    emit ERROR "sshfs exited 0 but the mount did not become live"
+    do_unmount "$MP" || true
+    rm -f "$err" 2>/dev/null || true
+    exit 0
+  fi
   emit STATUS mounted
   emit MOUNTPOINT "$MP"
   emit REMOTE "$ALIAS:$RPATH"

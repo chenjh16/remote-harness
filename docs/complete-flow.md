@@ -66,7 +66,7 @@ Key details:
 
 - Remote `rlocal` lives only in remote `~/.remote-harness/.sessions/.../ssh_config`.
 - The laptop-to-box RemoteForward alias lives only in local
-  `~/.remote-harness/.sessions/reverse-*/ssh_config`.
+  `~/.remote-harness/.sessions/rev.*/ssh_config`.
 - The remote box reuses or creates a dedicated key under remote `~/.remote-harness/keys/id_ed25519`.
 - The laptop may temporarily add a tagged, loopback-scoped
   `remote-harness:reverse-auth:<tag>` block to `~/.ssh/authorized_keys`; it is reference-counted
@@ -97,7 +97,7 @@ sequenceDiagram
 Key details:
 
 - `local-setup.sh` always uses a session-local SSH config under
-  `~/.remote-harness/.sessions/forward-*`.
+  `~/.remote-harness/.sessions/fwd.*`.
 - Raw SSH args become a session-local `<host>-dev` alias; an existing Host alias is used through a
   read-only include of the user's SSH config.
 - Files are read, written, edited, and searched in the local sshfs mount.

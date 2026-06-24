@@ -23,10 +23,11 @@ box session ssh_config:
       Port <port>
 ```
 
-The simple reverse path keeps session config files, `known_hosts`, and ControlPath sockets under
-`~/.remote-harness/.sessions/...` and removes them on cleanup where possible. It does not write
-`~/.ssh/config`, `known_hosts`, or SSH keys. Its only `~/.ssh` mutation is the laptop
-`authorized_keys` managed block used for temporary reverse authentication.
+The simple reverse path keeps session config files and `known_hosts` under
+`~/.remote-harness/.sessions/...`, disables OpenSSH multiplexing, and removes temporary state on
+cleanup where possible. It does not write `~/.ssh/config`, `known_hosts`, or SSH keys. Its only
+`~/.ssh` mutation is the laptop `authorized_keys` managed block used for temporary reverse
+authentication.
 
 ## Bootstrap Shape
 
@@ -54,10 +55,6 @@ ssh -n -o ClearAllForwardings=yes \
   RH_VIA="$h" RH_LANG=<lang> bash -s -- --mode reverse --launch <launch>
 )
 ```
-
-The old helper-fetch form used `ssh -o ClearAllForwardings=yes <CONNECT_ARGS>` to download
-`_common.sh` and `laptop-setup.sh`. That is retained here only as a compatibility note: any fetch
-that talks to the remote box must disable user-configured forwarding while reading scripts.
 
 ## Runtime Flow
 

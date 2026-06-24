@@ -65,10 +65,11 @@ on readable continuation lines.
 - The remote server receives only the information required for the actual setup.
 - The simple reverse flow uses a fixed box-side laptop alias (`rlocal`) by default, written only
   to a session-local remote ssh config under `~/.remote-harness/.sessions/.../ssh_config`.
-- The simple reverse flow keeps temporary SSH config, `known_hosts`, and ControlPath state under
-  `~/.remote-harness/.sessions/...`; cleanup removes the session-local directories at the end where
-  possible. It does not write `~/.ssh/config`, `known_hosts`, or SSH keys. Its only `~/.ssh`
-  mutation is the laptop `authorized_keys` managed block used for temporary reverse authentication.
+- The simple reverse flow keeps temporary SSH config and `known_hosts` under
+  `~/.remote-harness/.sessions/...`, disables OpenSSH multiplexing, and removes session-local
+  directories at the end where possible. It does not write `~/.ssh/config`, `known_hosts`, or SSH
+  keys. Its only `~/.ssh` mutation is the laptop `authorized_keys` managed block used for temporary
+  reverse authentication.
 - The launched agent gets a session-local `ssh` wrapper in `PATH`, so instructions can say
   `ssh rlocal ...` instead of `ssh -F <temp-config> rlocal ...`.
 - Local paths stay out of chat unless the user explicitly pastes them.

@@ -19,9 +19,9 @@ Every server target is used through a session-local ssh config under local
 `~/.remote-harness/.sessions/...`. If the user provides a Host alias, that alias is resolved through
 the session config. If the user provides raw SSH args such as `-p 2222 dev@example.com`,
 `local-setup.sh` creates a session-local `<host>-dev` alias there. It does not create or modify
-anything under local `~/.ssh`; temporary `known_hosts` and ControlPath sockets stay under
-`~/.remote-harness/.sessions/...`. The temp config is hidden from the launched agent with a session
-`ssh` wrapper.
+anything under local `~/.ssh`; temporary `known_hosts` stays under
+`~/.remote-harness/.sessions/...`, and session configs disable OpenSSH multiplexing. The temp config
+is hidden from the launched agent with a session `ssh` wrapper.
 
 ## Bootstrap Shape
 

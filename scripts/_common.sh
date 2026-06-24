@@ -70,19 +70,19 @@ ssh_config_value() {
 # Callers may append Host blocks after this prelude. If a user-managed
 # ~/.ssh/config exists it is included read-only, after the defaults, so HostName,
 # User, Port, IdentityFile, ProxyJump, etc. still resolve for aliases while
-# known_hosts and ControlPath stay inside the remote-harness session directory.
+# known_hosts stays inside the remote-harness session directory.
+#
+# Multiplexing is deliberately disabled. OpenSSH ControlPath is a Unix socket path; on macOS the
+# effective path limit is short enough that otherwise-valid session dirs can fail before sshfs starts.
 write_session_ssh_defaults() {
   _wssd_dir="$1"
   _wssd_kh="${2:-$_wssd_dir/known_hosts}"
-  _wssd_cp="${3:-$_wssd_dir/cm-%C}"
   {
     printf 'Host *\n'
     printf '    UserKnownHostsFile %s\n' "$(ssh_config_value "$_wssd_kh")"
     printf '    GlobalKnownHostsFile /dev/null\n'
     printf '    StrictHostKeyChecking accept-new\n'
-    printf '    ControlMaster auto\n'
-    printf '    ControlPath %s\n' "$(ssh_config_value "$_wssd_cp")"
-    printf '    ControlPersist 5m\n'
+    printf '    ControlMaster no\n'
     if [ -r "$HOME/.ssh/config" ]; then
       printf 'Include %s\n' "$(ssh_config_value "$HOME/.ssh/config")"
     fi

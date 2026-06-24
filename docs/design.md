@@ -51,7 +51,8 @@ Current simple flows use **session-local SSH config only**:
 
 Simple flows must not create, edit, back up, append to, or clean up local or remote
 `~/.ssh/config`, `known_hosts`, SSH keys, `config.rh-bak.*`, or `known_hosts_<alias>`. Temporary SSH
-configs, `known_hosts`, and ControlPath sockets live under `~/.remote-harness/.sessions/...`.
+configs and `known_hosts` live under `~/.remote-harness/.sessions/...`; generated configs disable
+OpenSSH multiplexing.
 
 The one intentional `~/.ssh` mutation is simple reverse laptop `authorized_keys`: when the box
 provides a remote-harness public key, `laptop-setup.sh` first checks for an existing active matching
@@ -87,7 +88,7 @@ Agent-specific channels:
 - opencode: `OPENCODE_CONFIG=<session config>`.
 - Codex: `-c developer_instructions=<rule>`; non-yolo also enables workspace-write network access
   and writable roots for the relevant `~/.remote-harness/.sessions/...` dirs so SSH can write its
-  temporary `known_hosts` and ControlPath there without touching `~/.ssh`.
+  temporary `known_hosts` there without touching `~/.ssh`.
 
 ## 7. Invariants
 

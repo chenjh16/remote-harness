@@ -714,7 +714,7 @@
         </div>
         <div class="lane-row">
           <div><strong>本地挂载</strong>`mount-project.sh --ssh-config`。</div>
-          <div><strong>临时 runtime</strong>`known_hosts` 和 ControlPath 在会话目录。</div>
+          <div><strong>临时 runtime</strong>`known_hosts` 在会话目录，SSH multiplexing 关闭。</div>
           <div><strong>真实项目</strong>sshfs 暴露服务器项目目录。</div>
           <div></div>
         </div>
@@ -812,7 +812,7 @@ ssh server-dev 'cd /srv/app && pytest'</code></div>
         <div class="card compact">
           <span class="tag blue">临时会话</span>
           <h3>SSH runtime</h3>
-          <p>`known_hosts`、ControlPath、session ssh_config、rule、wrapper 都在 `~/.remote-harness/.sessions`。</p>
+          <p>`known_hosts`、session ssh_config、rule、wrapper 都在 `~/.remote-harness/.sessions`，会话 SSH config 关闭 multiplexing。</p>
         </div>
         <div class="card compact">
           <span class="tag amber">持久复用</span>

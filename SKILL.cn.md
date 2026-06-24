@@ -46,8 +46,7 @@ Simple forward：
 - 构建、运行、测试、安装依赖、formatter、linter、language server、会修改状态的 git 命令，以及其他项目工具，
   必须通过 `ssh <server-alias> 'cd <project> && <cmd>'` 在服务器执行。
 
-旧的 Agent 引导式 reverse 流程已经从默认产品面清理掉。reverse、forward 和无法判断的请求都使用统一的
-simple bootstrap 流程。
+reverse、forward 和无法判断的请求都使用统一的 simple bootstrap 流程。
 
 ## 运行时
 
@@ -143,8 +142,8 @@ ssh -n -o ClearAllForwardings=yes \
 ssh config：`~/.remote-harness/.sessions/.../ssh_config`，退出清理时删除；不会在远端
 `~/.ssh` 下创建或修改任何文件。笔记本侧携带 RemoteForward 的 alias 也只写到本地
 `~/.remote-harness/.sessions/.../ssh_config`，由 setup 脚本内部 ssh wrapper 隐藏，并在退出时清理；
-临时 SSH config、`known_hosts` 和 ControlPath socket 都位于 `~/.remote-harness/.sessions/...`，
-不会写入笔记本 `~/.ssh`。
+临时 SSH config 和 `known_hosts` 都位于 `~/.remote-harness/.sessions/...`，不会写入笔记本
+`~/.ssh`；会话 config 会关闭 OpenSSH multiplexing。
 
 反向认证方面，远端会在自己的 `~/.remote-harness/keys` 下生成或复用 remote-harness key。本地 setup
 可以把这把公钥加入笔记本 `~/.ssh/authorized_keys` 中带
@@ -175,8 +174,8 @@ SSH 在服务器执行。退出启动的 Agent 后，会自动卸载项目并删
 
 forward setup 始终使用本地 `~/.remote-harness/.sessions/.../ssh_config` 下的会话级 ssh config。
 当用户输入的是原始 SSH 参数而不是 Host alias 时，会在其中创建会话级 `<host>-dev` alias。它不会在本地
-`~/.ssh` 下创建或修改任何文件；临时 `known_hosts` 和 ControlPath socket 也位于
-`~/.remote-harness/.sessions/...`。临时 config 会通过同样的会话级 `ssh` wrapper 对启动后的 Agent 隐藏。
+`~/.ssh` 下创建或修改任何文件；临时 `known_hosts` 也位于 `~/.remote-harness/.sessions/...`，
+且会话 config 会关闭 OpenSSH multiplexing。临时 config 会通过同样的会话级 `ssh` wrapper 对启动后的 Agent 隐藏。
 
 ## 前置条件
 

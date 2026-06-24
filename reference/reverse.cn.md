@@ -24,8 +24,8 @@ Simple reverse 表示：编程 Agent 运行在远端盒子，项目位于用户�
       Port <port>
 ```
 
-simple reverse 将会话 config、`known_hosts` 和 ControlPath socket 都放在
-`~/.remote-harness/.sessions/...`，退出时尽量清理。它不写 `~/.ssh/config`、`known_hosts` 或 SSH key。
+simple reverse 将会话 config 和 `known_hosts` 放在 `~/.remote-harness/.sessions/...`，关闭
+OpenSSH multiplexing，并在退出时尽量清理临时状态。它不写 `~/.ssh/config`、`known_hosts` 或 SSH key。
 唯一的 `~/.ssh` 修改是笔记本侧用于临时反向认证的 `authorized_keys` 托管块。
 
 ## Bootstrap 形态
@@ -53,9 +53,6 @@ ssh -n -o ClearAllForwardings=yes \
   RH_VIA="$h" RH_LANG=<lang> bash -s -- --mode reverse --launch <launch>
 )
 ```
-
-旧的 helper-fetch 形态曾使用 `ssh -o ClearAllForwardings=yes <CONNECT_ARGS>` 下载 `_common.sh`
-和 `laptop-setup.sh`。这里只作为兼容说明保留：任何从远端盒子读取脚本的 fetch 都必须禁用用户配置里的转发。
 
 ## 运行流程
 

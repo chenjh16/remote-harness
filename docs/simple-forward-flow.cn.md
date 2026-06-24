@@ -22,7 +22,7 @@ simple reverse。若请求模糊，则输出不带 `--mode` 的 `simple-bootstra
 - 调用中明确要求 YOLO 时即为最终选择；向导不会再询问 YOLO。
 - setup 始终在本地 `~/.remote-harness/.sessions/...` 下使用会话级 ssh config。Host alias 会通过该
   config 使用；原始 SSH 参数会得到会话级 `<host>-dev` alias。它不会在本地 `~/.ssh` 下创建或修改任何内容；
-  临时 `known_hosts` 和 ControlPath socket 也留在 `~/.remote-harness/.sessions/...`。
+  临时 `known_hosts` 也留在 `~/.remote-harness/.sessions/...`，且生成的 config 会关闭 OpenSSH multiplexing。
 - 默认本地挂载点是 `~/.remote-harness/mounts/<project>`；用户明确输入的挂载点可以使用。
 
 ## 用户命令形态

@@ -10,16 +10,13 @@
 
 - `SKILL.md` — 精简的 simple 模式技能入口。默认只输出一条本地 bootstrap 命令；不得让 Agent
   收集 SSH target、路径、端口或命名空间。
-- `reference/{reverse,forward,scripts}.md` — 当前 simple reverse/forward 行为与辅助脚本契约；
-  它们是参考文档，不是旧版 Agent 引导式 runbook。
+- `reference/{reverse,forward,scripts}.md` — 当前 simple reverse/forward 行为与辅助脚本契约。
 - `scripts/*.sh` — 确定性辅助脚本（stdout 输出 `KEY=VALUE`，stderr 输出说明信息）。`_common.sh` 是被
   source 的公共库（非入口脚本）。`simple-bootstrap.sh` 是公开的统一 simple 入口；它既可以从本地安装运行，
   也可以从远端 skill 安装目录读取后在本地运行。它会移交给 `simple-dispatch.sh`，由后者选择/分发
   reverse 或 forward；`simple-laptop-setup.sh` 和 `simple-local-setup.sh` 是分模式本地向导。
   `suggest-via.sh` 是远端侧辅助脚本，用于生成 bootstrap SSH 默认值；`laptop-setup.sh`（reverse 方向）/
   `local-setup.sh`（forward 方向）是底层编排器；`mount-project.sh`、`inject-rule.sh` 两个方向共用。
-  legacy/按需 helper（`preflight.sh`、`detect.sh`、`connect-guesses.sh`、`server-guesses.sh`、
-  `list-projects.sh`、`session-cache.sh`）不属于默认 simple 主路径。
 - `adapters/{codex,opencode}.md` — 各智能体专属说明。`opencode.md` 装成 opencode 的自定义命令；`codex.md` 仅供参考（Codex 没有自定义斜杠命令，所以 manage.sh 把共享的 `SKILL.md` 作为 Codex 原生**技能**装到 `$CODEX_HOME/skills/` 下，并通过 `$remote-harness` 调用）。两者都只是告知智能体读取 `SKILL.md` 并传入正确的 `--launch`。
 - `manage.sh` — 安装（拷贝）/ `--dev`（符号链接）/ `--uninstall`。将核心安装到
   `~/.remote-harness/{SKILL.md,SKILL.cn.md,scripts/,reference/,docs/}`，并安装智能体专属入口文件；
@@ -27,7 +24,7 @@
 
 ## 当前产品形态
 
-默认产品形态是 **simple reverse**：**A** = 运行编程 Agent 的远端机器，**P** = 位于 NAT 后、存放代码的用户笔记本。Agent 只返回一条本地 bootstrap 命令；所有具体 SSH/路径选择都在用户本地终端完成。对应支持的另一种形态是 **simple forward**：**A** = 运行 Codex/Agent 的本地机器，**P** = 存放项目和开发环境的 SSH 服务器。早期显式 reverse/forward runbook 已经从默认产品面清理掉；`reference/` 应与 simple 流程保持一致。
+默认产品形态是 **simple reverse**：**A** = 运行编程 Agent 的远端机器，**P** = 位于 NAT 后、存放代码的用户笔记本。Agent 只返回一条本地 bootstrap 命令；所有具体 SSH/路径选择都在用户本地终端完成。对应支持的另一种形态是 **simple forward**：**A** = 运行 Codex/Agent 的本地机器，**P** = 存放项目和开发环境的 SSH 服务器。`reference/` 应与 simple 流程保持一致。
 
 内部仍使用通用角色定义：**A** = 智能体运行所在机器；**P** = 代码所在机器（通过 ssh `<alias>` 访问）。底层 reverse 流程使用反向 SSH 隧道；forward 流程使用直接 ssh。两种方向均会将 P 上的项目通过 sshfs 挂载到 A 上的空目录，通过 `inject-rule.sh` 注入"在 `<alias>` 上构建"规则，并在挂载目录中启动智能体。
 
@@ -88,8 +85,8 @@
   language server、迁移、会修改状态的 git 命令及其他工具链/运行时工作）必须通过注入的
   `ssh <alias> 'cd ... && <cmd>'` 规则在服务器执行。
 - `local-setup.sh` 必须为每个服务器 target 使用会话级 SSH config，包括已有 Host alias。用户提供原始
-  SSH 参数时可以创建 `<host>-dev`；用户提供 Host alias 时可通过会话 config 使用该短名。所有 SSH 运行期
-  文件（`known_hosts`、ControlPath）都留在本地 `~/.remote-harness/.sessions/...` 下。
+  SSH 参数时可以创建 `<host>-dev`；用户提供 Host alias 时可通过会话 config 使用该短名。临时
+  `known_hosts` 留在本地 `~/.remote-harness/.sessions/...` 下，并关闭 multiplexing。
 - 默认本地挂载点位于本地 `~/.remote-harness/mounts/<project>`，退出时如为空应清理。用户手动输入的
   挂载点属于明确选择，可以创建/使用。
 
@@ -108,9 +105,9 @@
 5. **可移植性**：目标平台为 Linux、WSL 和 macOS。使用 `#!/usr/bin/env bash`；避免 GNU 专属标志（提供 BSD 回退方案）；端口监听检查顺序为 `ss → netstat -an → lsof`；sshfs 安装提示应感知操作系统；**macOS 使用 FUSE-T（无需内核扩展），绝不使用 macFUSE**。探针脚本使用 `set -uo pipefail`（不用 `-e`）以保证持续输出。
 6. **脚本在 stdout 输出 `KEY=VALUE`，在 stderr 输出人类可读说明。** 保持该契约不变，消费方依赖解析它。
 7. **除 reverse authorized_keys 例外外，simple 路径不得把 SSH 运行期状态写进 `~/.ssh`。**
-   reverse 和 forward setup 必须把会话级 ssh config、`known_hosts`、ControlPath socket 及其他
-   SSH 运行期文件放在 `~/.remote-harness/.sessions/...` 下。simple 流程不得创建、编辑、备份、追加或清理
-   本地或远端 `~/.ssh/config`、`known_hosts`、SSH key、`config.rh-bak.*` 或
+   reverse 和 forward setup 必须把会话级 ssh config、临时 `known_hosts` 及其他 SSH 运行期文件放在
+   `~/.remote-harness/.sessions/...` 下。生成的 config 保持 OpenSSH multiplexing 关闭，避免 macOS 上的
+   ControlPath socket 失败。simple 流程不得创建、编辑、备份、追加或清理本地或远端 `~/.ssh/config`、`known_hosts`、SSH key、`config.rh-bak.*` 或
    `known_hosts_<alias>`。唯一允许的 `~/.ssh` 修改是上文描述的 simple reverse 托管
    `authorized_keys` 块；它必须幂等、范围受限，并通过引用计数清理。为用户明确输入的 Host alias 读取
    用户已有 SSH config/key 是允许的；其他修改不允许。
@@ -127,8 +124,8 @@
 
 - 每次修改后执行 `bash -n scripts/*.sh manage.sh`（语法检查门控）。
 - 在沙盒 `HOME`/`RH_HOME` 中对各部分进行空跑（例如 `inject-rule.sh on … ; off …`；
-  `mount-project.sh --unmount`；只有修改 legacy 兼容 helper 时才跑 `preflight.sh --direction forward`）。
-  验证在修改 `_common.sh` 时 reverse 模式生成的 managed-alias 输出保持不变。
+  `mount-project.sh --unmount`；`setup-tunnel.sh --config …`）。验证在修改 `_common.sh` 时
+  reverse 模式生成的 managed-alias 输出保持不变。
 - Forward 回环端到端测试：向 `localhost` 添加一个 ssh 别名，运行 `local-setup.sh --via … --remote-path … --mountpoint /tmp/… --launch claude`；确认挂载、规则注入及退出时的卸载均正常。
 - 完整的双主机端到端测试（从远程主机 reverse / forward 到服务器，包括 macOS FUSE-T）为手动测试。
 - 仅在被要求时提交。本仓库发布到 GitHub（`origin/main`）。

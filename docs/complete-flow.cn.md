@@ -118,7 +118,7 @@ sequenceDiagram
    - 远端挂载点，留空则为远端 `~/.remote-harness/mounts/<project>`；
    - 是否 YOLO；若 skill 命令已带 `--yolo`，跳过该问题。
 2. 它把确认过的值保存到本地 `~/.remote-harness/simple-cache.env`。
-3. 它 SSH 到远端，创建远端会话目录 `~/.remote-harness/.sessions/simple-*/ssh_config`。
+3. 它 SSH 到远端，创建远端会话目录 `~/.remote-harness/.sessions/simple.*/ssh_config`。
 4. 远端执行 `setup-tunnel.sh`：
    - 推导或选择反向端口；
    - 优先复用远端 `~/.remote-harness/keys/id_ed25519`；
@@ -128,7 +128,7 @@ sequenceDiagram
 5. 本地执行 `laptop-setup.sh`：
    - 为本地到远端盒子的连接创建本地会话 ssh config；
    - 其中包含 `RemoteForward <port> 127.0.0.1:22`；
-   - SSH runtime 文件在本地 `~/.remote-harness/.sessions/reverse-*` 中。
+   - SSH runtime 文件在本地 `~/.remote-harness/.sessions/rev.*` 中。
 6. `laptop-setup.sh` 检查本地 SSH server：
    - 已监听则继续；
    - 未监听时按系统提示开启或安装。
@@ -217,7 +217,7 @@ sequenceDiagram
 4. `local-setup.sh` 解析服务器 SSH target：
    - 如果是裸 Host alias，沿用该短名，但通过本地会话 config 的只读 `Include ~/.ssh/config` 解析；
    - 如果是原始 SSH args，则创建会话级 `<host>-dev` alias；
-   - `known_hosts` 和 ControlPath 在本地 `~/.remote-harness/.sessions/forward-*` 中。
+   - `known_hosts` 在本地 `~/.remote-harness/.sessions/fwd.*` 中，且会话 config 关闭 OpenSSH multiplexing。
 5. `local-setup.sh` 探测服务器 key auth；如果需要密码，会提示用户体验可能不够顺滑。
 6. 本地运行 `mount-project.sh --ssh-config <本地临时config>`：
    - `sshfs <server-alias>:<服务器项目目录> <本地挂载点>`；
@@ -276,9 +276,9 @@ remote-harness 对 Codex 使用会话级注入，不修改全局 Codex 配置：
 | `simple-forward-cache.env` | 本机 `~/.remote-harness` | forward 的上次输入默认值 | 用户可删除重置 |
 | `simple-mode-cache.env` | 本机 `~/.remote-harness` | 模糊模式下的上次方向选择 | 用户可删除重置 |
 | bootstrap bundle | 本机 `~/.remote-harness/.sessions/bootstrap.*` | 从远端 source 抓取 helper 脚本 | bootstrap 退出删除 |
-| reverse 本地 ssh config | 本机 `~/.remote-harness/.sessions/reverse-*` | 本机到远端的 RemoteForward alias | 会话退出删除 |
-| reverse 远端 ssh config | 远端 `~/.remote-harness/.sessions/simple-*` | `rlocal` alias 和 known_hosts/ControlPath | 会话退出删除 |
-| forward 本地 ssh config | 本机 `~/.remote-harness/.sessions/forward-*` | server alias 和 known_hosts/ControlPath | 会话退出删除 |
+| reverse 本地 ssh config | 本机 `~/.remote-harness/.sessions/rev.*` | 本机到远端的 RemoteForward alias 和 known_hosts | 会话退出删除 |
+| reverse 远端 ssh config | 远端 `~/.remote-harness/.sessions/simple.*` | `rlocal` alias 和 known_hosts | 会话退出删除 |
+| forward 本地 ssh config | 本机 `~/.remote-harness/.sessions/fwd.*` | server alias 和 known_hosts | 会话退出删除 |
 | reverse 远端 key | 远端 `~/.remote-harness/keys/id_ed25519` | 远端回连笔记本的专用 identity | 保留复用 |
 | reverse authorized_keys block | 本机 `~/.ssh/authorized_keys` | 仅限回环来源的临时授权 | 引用计数为 0 时删除 |
 | 默认挂载点 | `~/.remote-harness/mounts/<project>` | sshfs 挂载目录 | 空目录在退出时删除 |

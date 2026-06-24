@@ -49,8 +49,8 @@ stdout 输出可解析的 `KEY=VALUE`，在 stderr 输出人工提示。
 | forward，本地 -> 服务器 | 已有 Host alias 或 `<host>-dev` | 本地 `~/.remote-harness/.sessions/.../ssh_config` | 给 sshfs 和服务器命令使用的短 alias，并隔离 SSH 运行期文件 |
 
 simple 流程不得创建、编辑、备份、追加或清理本地或远端 `~/.ssh/config`、`known_hosts`、SSH key、
-`config.rh-bak.*` 或 `known_hosts_<alias>`。临时 SSH config、`known_hosts` 和 ControlPath socket
-都位于 `~/.remote-harness/.sessions/...`。
+`config.rh-bak.*` 或 `known_hosts_<alias>`。临时 SSH config 和 `known_hosts` 都位于
+`~/.remote-harness/.sessions/...`；生成的 config 关闭 OpenSSH multiplexing。
 
 唯一有意的 `~/.ssh` 修改是 simple reverse 中笔记本侧的 `authorized_keys`：当远端提供
 remote-harness 公钥时，`laptop-setup.sh` 会先检测本机是否已有匹配且有效的授权；若没有，才追加带
@@ -82,7 +82,7 @@ simple reverse 中，Agent 可以只基于服务器侧事实给出远端 SSH tar
 - opencode：`OPENCODE_CONFIG=<session config>`。
 - Codex：`-c developer_instructions=<rule>`；非 yolo 时还启用 workspace-write 网络访问，并只把相关
   `~/.remote-harness/.sessions/...` 目录加入 writable roots，让 SSH 把临时 `known_hosts` 和
-  ControlPath 写在那里，而不触碰 `~/.ssh`。
+  运行时文件写在那里，而不触碰 `~/.ssh`。
 
 ## 7. 不变量
 

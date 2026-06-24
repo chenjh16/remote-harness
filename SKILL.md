@@ -48,8 +48,7 @@ Simple forward:
 - Builds, runs, tests, installs, formatters, linters, language servers, mutating git commands, and
   other project tools must run on the server through `ssh <server-alias> 'cd <project> && <cmd>'`.
 
-The old Agent-guided reverse flow has been removed from the default product surface. Use the unified
-simple bootstrap flow for reverse, forward, and ambiguous requests.
+Use the unified simple bootstrap flow for reverse, forward, and ambiguous requests.
 
 ## Runtime
 
@@ -155,8 +154,9 @@ alias is written to a temporary ssh config on the remote box, under
 or modify any file under the remote box's `~/.ssh`. The laptop-side RemoteForward alias is also
 session-local under local
 `~/.remote-harness/.sessions/.../ssh_config`; it is hidden behind the setup script's ssh wrapper and
-removed on exit. Temporary SSH configs, `known_hosts`, and ControlPath sockets live under
-`~/.remote-harness/.sessions/...`; they are not written under the laptop's `~/.ssh`.
+removed on exit. Temporary SSH configs and `known_hosts` live under
+`~/.remote-harness/.sessions/...`; they are not written under the laptop's `~/.ssh`, and session
+configs disable OpenSSH multiplexing.
 
 For reverse authentication, the remote box generates or reuses a remote-harness key under its own
 `~/.remote-harness/keys`. The local setup may add that public key to the laptop's
@@ -191,9 +191,9 @@ unmounts the project and removes the session rule.
 The forward setup always uses a session-local ssh config under local
 `~/.remote-harness/.sessions/.../ssh_config`. When the user enters raw SSH args instead of a Host
 alias, it creates a session-local `<host>-dev` alias there. It does not create or modify any file
-under local `~/.ssh`; temporary `known_hosts` and ControlPath sockets also stay under
-`~/.remote-harness/.sessions/...`. The temp config is hidden from the launched agent with the same
-session `ssh` wrapper pattern.
+under local `~/.ssh`; temporary `known_hosts` also stays under
+`~/.remote-harness/.sessions/...`, and session configs disable OpenSSH multiplexing. The temp config
+is hidden from the launched agent with the same session `ssh` wrapper pattern.
 
 ## Preconditions
 

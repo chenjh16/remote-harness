@@ -27,8 +27,8 @@ reverse and caches the mode choice.
 - A YOLO request in the invocation is final; the wizard does not ask for YOLO again.
 - Setup always uses a session-local ssh config under local `~/.remote-harness/.sessions/...`. Host
   aliases are used through that config; raw SSH args get a session-local `<host>-dev` alias. It does
-  not create or modify anything under local `~/.ssh`; temporary `known_hosts` and ControlPath sockets
-  also stay under `~/.remote-harness/.sessions/...`.
+  not create or modify anything under local `~/.ssh`; temporary `known_hosts` also stays under
+  `~/.remote-harness/.sessions/...`, and generated configs disable OpenSSH multiplexing.
 - The default local mountpoint is `~/.remote-harness/mounts/<project>`; explicit user-entered
   mountpoints are allowed.
 

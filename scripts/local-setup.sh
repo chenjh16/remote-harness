@@ -94,11 +94,11 @@ parse_via "$VIA"
 }
 [ -n "$V_HOST" ] || { printf 'could not parse --via into an ssh host/alias\n' >&2; exit 2; }
 safe_ssh_token "$V_HOST" || { printf 'unsafe ssh host in --via: %s\n' "$V_HOST" >&2; exit 2; }
-# Always use a session-local ssh config so known_hosts/ControlPath stay under ~/.remote-harness.
+# Always use a session-local ssh config so known_hosts stays under ~/.remote-harness.
 safe_alias_base="$(printf '%s' "$V_HOST" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._-]*//; s/[._-]*$//')"
 [ -n "$safe_alias_base" ] || safe_alias_base=server
 mkdir -p "$HOME/.remote-harness/.sessions" 2>/dev/null || true
-LOCAL_SESSION_DIR="$(mktemp -d "$HOME/.remote-harness/.sessions/forward-${safe_alias_base}.XXXXXX")" || exit 2
+LOCAL_SESSION_DIR="$(mktemp -d "$HOME/.remote-harness/.sessions/fwd.XXXXXX")" || exit 2
 LOCAL_SSH_CONFIG="$LOCAL_SESSION_DIR/ssh_config"
 CFG="$LOCAL_SSH_CONFIG"; touch "$CFG"; chmod 600 "$CFG" 2>/dev/null || true
 write_session_ssh_defaults "$LOCAL_SESSION_DIR"

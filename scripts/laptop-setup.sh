@@ -144,7 +144,7 @@ tunnel_still_needed() {
 # -- temporary authorized_keys management -----------------------------------
 # The only intentional ~/.ssh write in the simple reverse path is a tagged,
 # loopback-scoped authorized_keys block for the remote-harness key generated on
-# the box. Everything else (ssh config, known_hosts, ControlPath) remains under
+# the box. Everything else (ssh config, known_hosts) remains under
 # ~/.remote-harness.
 AUTHKEY_TYPE="" AUTHKEY_BLOB="" AUTHKEY_TAG="" AUTHKEY_BEGIN="" AUTHKEY_END=""
 AUTHKEY_REF_DIR="" AUTHKEY_TOKEN="" AUTHKEY_MANAGED=0 AUTHKEY_LOCK_DIR="" AUTHKEY_LOCK_HELD=0
@@ -327,7 +327,7 @@ cleanup() {
       case \"\$cfg\" in
         */.remote-harness/.sessions/*/ssh_config)
           dir=\$(dirname \"\$cfg\")
-          rm -f \"\$cfg\" \"\$dir\"/known_hosts_* \"\$dir\"/cm-* 2>/dev/null || true
+          rm -f \"\$cfg\" \"\$dir\"/known_hosts_* 2>/dev/null || true
           rmdir \"\$dir\" 2>/dev/null || true
           ;;
       esac
@@ -471,7 +471,7 @@ TARGET="${HOST:-${BOX_USER:-${V_USER:-box}}}-remote-harness"
 safe_target="$(printf '%s' "$TARGET" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._-]*//; s/[._-]*$//')"
 [ -n "$safe_target" ] || safe_target=box
 mkdir -p "$HOME/.remote-harness/.sessions" 2>/dev/null || true
-LOCAL_SESSION_DIR="$(mktemp -d "$HOME/.remote-harness/.sessions/reverse-${safe_target}.XXXXXX")" || exit 2
+LOCAL_SESSION_DIR="$(mktemp -d "$HOME/.remote-harness/.sessions/rev.XXXXXX")" || exit 2
 LOCAL_SSH_CONFIG="$LOCAL_SESSION_DIR/ssh_config"
 CFG="$LOCAL_SSH_CONFIG"; touch "$CFG"; chmod 600 "$CFG" 2>/dev/null || true
 write_session_ssh_defaults "$LOCAL_SESSION_DIR"
@@ -526,7 +526,7 @@ ssh -O exit "$TARGET" 2>/dev/null || true
 
 remote_port_listening() {
   local _port="$1"
-  # Portable listener check on the box (ss -> netstat -an [GNU/BSD] -> lsof), matching detect.sh /
+  # Portable listener check on the box (ss -> netstat -an [GNU/BSD] -> lsof), matching
   # check-tunnel.sh; extracts the port from host:PORT or BSD host.PORT and matches exactly.
   ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=3 "$TARGET" \
     "{ if command -v ss >/dev/null 2>&1; then ss -tlnH 2>/dev/null | awk '{print \$4}';

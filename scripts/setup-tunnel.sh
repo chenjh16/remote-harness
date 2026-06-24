@@ -64,11 +64,9 @@ done
 [ -n "$ALIAS" ] && [ -n "$LUSER" ] && [ -n "$CFG_OVERRIDE" ] \
   || die "usage: setup-tunnel.sh --config ABS_PATH --alias NAME --user LAPTOP_USER (--port PORT | --namespace RU) [--identity KEYFILE] [--gen-key]"
 
-# Derive a STABLE reverse port from the confirmed real-user namespace when no explicit --port was
+# Derive a STABLE reverse port from the confirmed namespace when no explicit --port was
 # given: hash RU -> a port in [20002,29992] (step 10, ends in 2, below the ephemeral floor; 1000 slots
-# so distinct users rarely collide), then probe for a free slot. The namespace is sanitized exactly as
-# detect.sh sanitizes REALUSER_GUESS, so both hash identical bytes — SAME formula as detect.sh's
-# SUGGESTED_PORT, KEEP THEM IN SYNC.
+# so distinct users rarely collide), then probe for a free slot.
 if [ -z "$PORT" ]; then
   [ -n "$NAMESPACE" ] || die "need --port PORT or --namespace RU"
   _ns="$(printf '%s' "$NAMESPACE" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._-]*//; s/[._-]*$//')"
@@ -161,12 +159,8 @@ new="$(mktemp "$(dirname "$CFG")/.rh-cfg.XXXXXX" 2>/dev/null)" || new="$CFG.rh-n
   printf '    StrictHostKeyChecking accept-new\n'
   printf '    ServerAliveInterval 30\n'
   printf '    ServerAliveCountMax 3\n'
-  # Multiplex: keep one warm connection so repeated ssh / sshfs to the laptop are snappy.
-  # %C (a hash of conn params) keeps the socket path short — a literal %r@%h:%p can exceed the
-  # ~104-char unix-socket limit on macOS and fail with "ControlPath too long".
-  printf '    ControlMaster auto\n'
-  printf '    ControlPath %s\n' "$(ssh_config_value "$(dirname "$CFG")/cm-%C")"
-  printf '    ControlPersist 5m\n'
+  # Disable multiplexing: avoiding ControlPath sockets makes macOS/FUSE-T sessions much more robust.
+  printf '    ControlMaster no\n'
   printf '%s\n' "$END"
 } > "$new"
 chmod 600 "$new" 2>/dev/null || true

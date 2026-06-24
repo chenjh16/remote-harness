@@ -18,8 +18,8 @@ Simple forward 表示：Codex 或其他编程 Agent 在本地运行，而项目�
 所有服务器 target 都通过本地 `~/.remote-harness/.sessions/...` 下的会话级 ssh config 使用。若用户提供
 Host alias，该 alias 通过会话 config 解析；若用户提供 `-p 2222 dev@example.com` 这类原始 SSH 参数，
 `local-setup.sh` 会在该 config 中创建会话级 `<host>-dev` alias。它不会在本地 `~/.ssh` 下创建或修改任何内容；
-临时 `known_hosts` 和 ControlPath socket 都留在 `~/.remote-harness/.sessions/...`。临时 config 通过会话级
-`ssh` wrapper 对启动后的 Agent 隐藏。
+临时 `known_hosts` 留在 `~/.remote-harness/.sessions/...`，且会话 config 关闭 OpenSSH multiplexing。
+临时 config 通过会话级 `ssh` wrapper 对启动后的 Agent 隐藏。
 
 ## Bootstrap 形态
 

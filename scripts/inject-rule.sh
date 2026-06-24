@@ -15,7 +15,7 @@
 #              Also passes `-s workspace-write -c sandbox_workspace_write.network_access=true` and
 #              a writable root for the session-owned ~/.remote-harness/.sessions dirs because codex's
 #              default sandbox blocks network and otherwise prevents ssh from writing its temp
-#              known_hosts/ControlPath there. It never makes ~/.ssh writable.
+#              known_hosts there. It never makes ~/.ssh writable.
 #              The project's own AGENTS.md is still read additively; the mounted repo is never touched.
 #
 #   inject-rule.sh on  <agent> <project_path_on_host> <host_alias> <mountpoint> [yolo:0|1] [ssh_config]
@@ -220,8 +220,8 @@ case "${1:-}" in
         # default is IGNORED. Under --yolo, --dangerously-bypass-approvals-and-sandbox already drops
         # the sandbox entirely, so DON'T add -s there (it would conflict).
         # workspace-write needs explicit network access for the rule's `ssh <host> ...`, plus write
-        # access to the session-owned directories where the wrapper/config put known_hosts and
-        # ControlPath. Do not add ~/.ssh; user SSH files remain read-only/user-managed.
+        # access to the session-owned directories where the wrapper/config put temporary known_hosts.
+        # Do not add ~/.ssh; user SSH files remain read-only/user-managed.
         if [ "$yolo" != 1 ]; then
           roots_cfg="$(codex_writable_roots_cfg "$SD" "$ssh_config")"
           flags_out="$flags_out -s workspace-write -c sandbox_workspace_write.network_access=true -c $(sq "$roots_cfg")"

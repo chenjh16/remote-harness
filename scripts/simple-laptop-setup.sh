@@ -319,7 +319,7 @@ setup_out="$(
     rh=\"\${RH_HOME:-\$HOME/.remote-harness}\"
     parent=\"\$rh/.sessions\"
     mkdir -p \"\$parent\" 2>/dev/null || exit 1
-    sd=\$(mktemp -d \"\$parent/simple-$(printf '%s' "$session_label" | sed 's/[^A-Za-z0-9._-]/_/g').XXXXXX\") || exit 1
+    sd=\$(mktemp -d \"\$parent/simple.XXXXXX\") || exit 1
     cfg=\"\$sd/ssh_config\"
     [ -x \"\$rh/scripts/setup-tunnel.sh\" ] || { printf 'ERROR=missing setup-tunnel.sh\n'; exit 2; }
     \"\$rh/scripts/setup-tunnel.sh\" --config \"\$cfg\" --alias $(sq "$BOX_ALIAS") --namespace $(sq "$NAMESPACE") --user $(sq "$LAPTOP_USER") --gen-key

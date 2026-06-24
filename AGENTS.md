@@ -12,7 +12,7 @@ is for agents *developing* remote-harness itself.
 - `SKILL.md` — lean simple-mode skill entry point. By default it emits one local bootstrap command;
   it must not ask the agent to collect SSH targets, paths, ports, or namespaces.
 - `reference/{reverse,forward,scripts}.md` — current simple reverse/forward behavior and
-  helper-script contracts. These are reference docs, not old Agent-guided runbooks.
+  helper-script contracts.
 - `scripts/*.sh` — the deterministic helpers (KEY=VALUE on stdout, notes on stderr). `_common.sh` is
   a sourced library (not an entry point). `simple-bootstrap.sh` is the public unified simple entry
   point; it can run from a local install or be fetched from a remote skill install. It delegates to
@@ -20,9 +20,7 @@ is for agents *developing* remote-harness itself.
   `simple-local-setup.sh` are the mode-specific local wizards. `suggest-via.sh` is a remote-only
   helper for a best-effort bootstrap SSH default; `laptop-setup.sh` (reverse) /
   `local-setup.sh` (forward) are the lower-level orchestrators; `mount-project.sh` and
-  `inject-rule.sh` are shared. Legacy/opt-in helpers (`preflight.sh`, `detect.sh`,
-  `connect-guesses.sh`, `server-guesses.sh`, `list-projects.sh`, `session-cache.sh`) are not part of
-  the default simple path.
+  `inject-rule.sh` are shared.
 - `adapters/{codex,opencode}.md` — per-agent notes. `opencode.md` is installed as opencode's custom
   command; `codex.md` is reference-only (Codex has no custom slash commands, so manage.sh installs the
   shared `SKILL.md` as a native Codex **skill** under `$CODEX_HOME/skills/`, invoked as
@@ -37,8 +35,7 @@ The default product is **simple reverse**: **A** = remote box where the coding a
 the user's laptop behind NAT where the code lives. The agent returns one local bootstrap command; all
 concrete SSH/path choices happen in the user's local terminal. The supported counterpart is
 **simple forward**: **A** = local machine where Codex/agent runs, **P** = SSH server where the
-project and dev environment live. The old explicit reverse/forward runbooks have been removed from
-the default surface; keep `reference/` aligned with the simple flows.
+project and dev environment live. Keep `reference/` aligned with the simple flows.
 
 Generic roles still matter for internals: **A** = machine the agent runs on; **P** = machine the code
 lives on (an ssh `<alias>`). The lower-level reverse flow uses a reverse SSH tunnel; the forward flow
@@ -119,8 +116,8 @@ uses direct ssh. Both mount P's project onto an empty dir on A, inject "build on
   <cmd>'` rule.
 - `local-setup.sh` must use a session-local SSH config for every server target, including an existing
   Host alias. When the user supplied raw SSH args it may create `<host>-dev`; when the user supplied
-  a Host alias it can use that short name through the session config. In all cases SSH runtime files
-  (`known_hosts`, ControlPath) stay under local `~/.remote-harness/.sessions/...`.
+  a Host alias it can use that short name through the session config. In all cases temporary
+  `known_hosts` stays under local `~/.remote-harness/.sessions/...`, with multiplexing disabled.
 - The default local mountpoint is under local `~/.remote-harness/mounts/<project>` and should be
   removed on exit when empty. User-entered mountpoints are allowed because they are explicit choices.
 
@@ -154,9 +151,10 @@ uses direct ssh. Both mount P's project onto an empty dir on A, inject "build on
    on probes that must keep emitting.
 6. **Scripts emit `KEY=VALUE` on stdout, human notes on stderr.** Keep that contract; consumers parse it.
 7. **No simple path writes SSH runtime state under `~/.ssh`, except reverse authorized_keys.**
-   Reverse and forward setup must use session-local ssh config files, `known_hosts`, ControlPath
-   sockets, and other SSH runtime files under `~/.remote-harness/.sessions/...`. Do not create,
-   edit, back up, append to, or clean up local or remote `~/.ssh/config`, `known_hosts`, SSH keys,
+   Reverse and forward setup must use session-local ssh config files, temporary `known_hosts`, and
+   other SSH runtime files under `~/.remote-harness/.sessions/...`. Keep generated configs with
+   OpenSSH multiplexing disabled to avoid ControlPath socket failures on macOS. Do not create, edit,
+   back up, append to, or clean up local or remote `~/.ssh/config`, `known_hosts`, SSH keys,
    `config.rh-bak.*`, or `known_hosts_<alias>`. The only allowed `~/.ssh` mutation is the simple
    reverse tagged `authorized_keys` block described above; it must be idempotent, scoped, and
    cleaned up with reference counting. Reading user-managed SSH config/keys for an explicit Host
@@ -178,9 +176,8 @@ uses direct ssh. Both mount P's project onto an empty dir on A, inject "build on
 
 - `bash -n scripts/*.sh manage.sh` after every change (syntax gate).
 - Dry-run pieces in a sandbox `HOME`/`RH_HOME` (e.g. `inject-rule.sh on … ; off …`;
-  `mount-project.sh --unmount`; legacy `preflight.sh --direction forward` only when touching that
-  compatibility helper). Verify reverse's managed-alias output is unchanged when touching
-  `_common.sh`.
+  `mount-project.sh --unmount`; `setup-tunnel.sh --config …`). Verify reverse's managed-alias
+  output is unchanged when touching `_common.sh`.
 - Forward loopback E2E: add an ssh alias to `localhost`, run `local-setup.sh --via … --remote-path …
   --mountpoint /tmp/… --launch claude`; confirm mount + rule + unmount-on-exit.
 - The full two-host E2E (reverse from a box / forward to a server, incl. macOS FUSE-T) is a manual test.

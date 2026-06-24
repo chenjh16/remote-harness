@@ -44,7 +44,7 @@
 
 ### 工作原理(两个方向)
 
-默认使用 simple reverse：Agent 在远端盒子，代码在你的笔记本。当你明确要求本地 Codex/Agent 开发服务器项目时，使用 simple forward。旧的双向 Agent 交互式 runbook 已清理；`reference/` 现在记录当前 simple 流程和脚本契约。
+默认使用 simple reverse：Agent 在远端盒子，代码在你的笔记本。当你明确要求本地 Codex/Agent 开发服务器项目时，使用 simple forward。`reference/` 记录当前 simple 流程和脚本契约。
 
 **① 反向(reverse)— Agent 在远程盒子,代码在你的笔记本(NAT 后)**
 
@@ -59,7 +59,7 @@
 ```
 
 反向和正向的 simple setup 都使用 `~/.remote-harness/.sessions/...` 下的会话级 SSH
-配置、`known_hosts` 和 ControlPath。唯一的 `~/.ssh` 写入例外是反向模式可在笔记本
+配置和 `known_hosts`，并关闭 OpenSSH multiplexing。唯一的 `~/.ssh` 写入例外是反向模式可在笔记本
 `~/.ssh/authorized_keys` 中追加带标签的临时授权块，并在退出时清理。
 
 **② 正向(forward)— Agent 在本机,代码在可直连的远程服务器**
@@ -140,8 +140,7 @@ remote-harness/
 │   ├── setup-tunnel.sh check-tunnel.sh   # 反向隧道的会话级别名/检查
 │   ├── mount-project.sh inject-rule.sh   # 两向复用的挂载与规则注入
 │   ├── laptop-setup.sh       # 反向编排(在笔记本上跑)
-│   ├── local-setup.sh        # 正向编排(在本机上跑)
-│   └── legacy/按需: preflight.sh detect.sh connect-guesses.sh server-guesses.sh list-projects.sh session-cache.sh
+│   └── local-setup.sh        # 正向编排(在本机上跑)
 ├── adapters/{codex,opencode}.md   # 各 Agent 的入口(只设置 --launch)
 ├── manage.sh                 # 安装 / --dev / --uninstall
 ├── docs/                     # 设计与完整流程文档(安装时一并复制/软链)
@@ -158,14 +157,14 @@ remote-harness/
 ### 安全与隐私
 
 - simple setup 不在本地或远端 `~/.ssh/config`、`known_hosts`、SSH key、`config.rh-bak.*` 或
-  `known_hosts_<alias>` 下创建、修改、备份、追加或清理内容。所有临时 SSH alias、`known_hosts` 和
-  ControlPath 都位于 `~/.remote-harness/.sessions/...`，并在会话结束时尽量清理。
+  `known_hosts_<alias>` 下创建、修改、备份、追加或清理内容。所有临时 SSH alias 和 `known_hosts`
+  都位于 `~/.remote-harness/.sessions/...`，并在会话结束时尽量清理；会话 config 关闭 OpenSSH multiplexing。
 - 反向模式的唯一 `~/.ssh` 写入例外是本机 `authorized_keys`：脚本会先检查是否已有匹配有效 key；
   没有时才追加带 `remote-harness:reverse-auth:<tag>` 标签、`from="127.0.0.1,::1"` 限制的临时块。
   托管块通过 `~/.remote-harness/.sessions/authorized-keys/...` 引用计数，最后一个会话退出时删除。
 - 反向隧道用 `RemoteForward <端口> 127.0.0.1:22`(仅回环);多用户盒子上同机其他用户能到达该端口,
   但没有你的私钥无法认证。
-- 多人共用同一个服务器账号时，simple reverse 默认使用会话别名 `rlocal`，别名、known_hosts 与 ControlPath 都放在
+- 多人共用同一个服务器账号时，simple reverse 默认使用会话别名 `rlocal`，别名和 known_hosts 都放在
   远端会话目录中；不会覆盖共享账号的 `~/.ssh/config`。同一台笔记本的多项目会话仍可复用活动隧道，
   最后一个会话退出时清理。
 - `--yolo` 会绕过审批,**仅在你明确要求时**才启用;opencode 的 `permission:allow` 只写进**本次会话**
@@ -209,9 +208,8 @@ machine the code lives on (an ssh `<alias>`).
 ### How it works (two directions)
 
 The default is simple reverse: agent on a remote box, code on your laptop. When you explicitly ask
-for local Codex/agent with a server project, use simple forward. The older bidirectional
-agent-guided runbooks have been removed; `reference/` now documents the current simple flows and
-script contracts.
+for local Codex/agent with a server project, use simple forward. `reference/` documents the current
+simple flows and script contracts.
 
 **① Reverse — agent on a remote box, code on your laptop (behind NAT).** The box can't dial the
 laptop, so the laptop opens a **reverse SSH tunnel** and its project is sshfs-mounted onto the box.
@@ -223,8 +221,8 @@ box:   ssh <alias>          → 127.0.0.1:<PORT> → (tunnel) → laptop:22
        sshfs <alias>:/proj  → same tunnel       → laptop files mounted here
 ```
 
-Both simple directions use session-local SSH config files, `known_hosts`, and ControlPath sockets
-under `~/.remote-harness/.sessions/...`. The only `~/.ssh` write exception is reverse mode: the
+Both simple directions use session-local SSH config files and `known_hosts` under
+`~/.remote-harness/.sessions/...`, with OpenSSH multiplexing disabled. The only `~/.ssh` write exception is reverse mode: the
 laptop may get a tagged temporary `authorized_keys` block that is removed on exit.
 
 **② Forward — agent local, code on a directly ssh-reachable server.** No tunnel: the local machine
@@ -313,8 +311,7 @@ remote-harness/
 │   ├── setup-tunnel.sh check-tunnel.sh        # reverse session alias + tunnel check
 │   ├── mount-project.sh inject-rule.sh        # shared mount + session rule helpers
 │   ├── laptop-setup.sh                        # reverse orchestrator
-│   ├── local-setup.sh                         # forward orchestrator
-│   └── legacy/opt-in: preflight.sh detect.sh connect-guesses.sh server-guesses.sh list-projects.sh session-cache.sh
+│   └── local-setup.sh                         # forward orchestrator
 ├── adapters/{codex,opencode}.md
 ├── manage.sh
 ├── docs/                            # design and complete-flow docs (installed with the skill)
@@ -333,8 +330,8 @@ remote-harness/
 
 - Simple setup does not create, modify, back up, append to, or clean up local or remote
   `~/.ssh/config`, `known_hosts`, SSH keys, `config.rh-bak.*`, or `known_hosts_<alias>`. Temporary
-  SSH aliases, `known_hosts`, and ControlPath sockets live under
-  `~/.remote-harness/.sessions/...` and are cleaned up at session end where possible.
+  SSH aliases and `known_hosts` live under `~/.remote-harness/.sessions/...` and are cleaned up at
+  session end where possible; session configs disable OpenSSH multiplexing.
 - The only `~/.ssh` write exception is reverse-mode laptop `authorized_keys`: setup checks for an
   existing active matching key first, otherwise appends a tagged
   `remote-harness:reverse-auth:<tag>` block restricted with `from="127.0.0.1,::1"`. Managed blocks
@@ -343,7 +340,7 @@ remote-harness/
 - The reverse tunnel binds loopback only (`RemoteForward <PORT> 127.0.0.1:22`); on a multi-user box
   other local users can reach that port but cannot authenticate without your private key.
 - When several people share one server account, simple reverse uses the session alias `rlocal` and
-  keeps alias/known_hosts/ControlPath state in the remote session directory, so one run does not overwrite the
+  keeps alias/known_hosts state in the remote session directory, so one run does not overwrite the
   shared account's `~/.ssh/config`. Multiple projects from the same laptop can reuse a live tunnel;
   the last session out cleans it up.
 - `--yolo` bypasses approvals and is applied **only when you ask**; opencode's `permission:allow`

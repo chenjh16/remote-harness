@@ -35,9 +35,10 @@ Shell 版没有 GUI，所以等价替代是：用本地 CLI wizard 收集信息�
   如果调用时没有明确要求，则本地向导按本地缓存作为默认值询问。
 - simple 反向流程默认使用固定的远端回连别名 `rlocal`。
 - `rlocal` 只写入远端会话级临时 ssh config：`~/.remote-harness/.sessions/.../ssh_config`。
-- simple 反向流程把临时 SSH config、`known_hosts` 和 ControlPath 状态都放在
-  `~/.remote-harness/.sessions/...`；退出清理时会尽量删除这些会话级目录。它不写 `~/.ssh/config`、
-  `known_hosts` 或 SSH key；唯一的 `~/.ssh` 修改是笔记本侧用于临时反向认证的 `authorized_keys` 托管块。
+- simple 反向流程把临时 SSH config 和 `known_hosts` 放在
+  `~/.remote-harness/.sessions/...`，并关闭 OpenSSH multiplexing；退出清理时会尽量删除这些会话级目录。
+  它不写 `~/.ssh/config`、`known_hosts` 或 SSH key；唯一的 `~/.ssh` 修改是笔记本侧用于临时反向认证的
+  `authorized_keys` 托管块。
 - 启动 Agent 时会在本次会话的 `PATH` 中加入临时 `ssh` 包装器，所以注入规则里只需要写 `ssh rlocal ...`。
 - 服务器只在实际部署时收到必要配置，例如 `rlocal` 临时别名、反向端口和挂载请求。
 - 本地路径不会进入 Agent 聊天上下文；如果用户不主动粘贴，Agent 看不到这些值。
