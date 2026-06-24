@@ -2,16 +2,17 @@
 # remote-harness / laptop-setup.sh — run ON YOUR LAPTOP.
 #
 # Full flow (all in one command, no editing required):
-#   Phase 1 — Ensure SSH server on, authorize the box's key, write RemoteForward to ~/.ssh/config
+#   Phase 1 — Ensure SSH server on, write RemoteForward to a session ssh config
 #   Phase 2 — Reconnect automatically (establishes the reverse tunnel)
 #   Phase 3 — Pick a project dir on THIS laptop (readline prompt, defaults to cwd)
 #   Phase 4 — Mount the chosen dir on the remote box via sshfs (over the tunnel)
-#   Phase 5 — Launch the chosen agent (claude/codex/opencode) on the box in the mounted dir (ssh -t)
+#   Phase 5 — Launch the chosen agent (claude/codex/opencode) on the box in the mounted dir (ssh -tt)
 #
 # Usage (emitted by the skill — paste as-is). This script sources _common.sh from beside it, so the
 # command fetches BOTH files into one temp dir (the laptop usually has no install):
 #   (
-#     d=$(mktemp -d "${TMPDIR:-/tmp}/rh.XXXXXX") || exit
+#     mkdir -p "$HOME/.remote-harness/.sessions"
+#     d=$(mktemp -d "$HOME/.remote-harness/.sessions/fetch.XXXXXX") || exit
 #     trap 'rm -rf "$d"' EXIT
 #     ssh -o ClearAllForwardings=yes <CONNECT> 'cat ~/.remote-harness/scripts/_common.sh'      >"$d/_common.sh" &&
 #     ssh -o ClearAllForwardings=yes <CONNECT> 'cat ~/.remote-harness/scripts/laptop-setup.sh' >"$d/laptop-setup.sh" &&
@@ -23,10 +24,12 @@
 #   --port <PORT>         RemoteForward port on the remote (required)
 #   --via <ssh-args>      exact ssh args to reach the box (e.g. "-p 2222 user@1.2.3.4")
 #   --box-alias <name>    alias the BOX uses to reach back to this laptop (default: <user>-mac)
-#   --pubkey <key>        box public key to authorize (fetched via --via if omitted)
+#   --box-ssh-config <f>  box-side ssh config file for that alias (session-local; required
+#                         for full sessions; optional with --setup-only)
+#   --pubkey <key>        remote-harness public key to authorize temporarily in authorized_keys
 #   --box-user <user>     remote box username (for mount path and alias naming)
 #   --remote-mountpoint <d>  exact box dir to mount the project at (must be empty;
-#                            default: <remote $HOME>/work/<project-name>)
+#                            default: <remote $RH_HOME>/mounts/<project-name>)
 #   --project-dir <d>     laptop project dir to mount (validated; prompts again if invalid)
 #   --launch <cmd>        coding-agent CLI to start on the remote (default: claude;
 #                         Codex passes 'codex', opencode passes 'opencode')
@@ -44,7 +47,7 @@ need_arg() {
 }
 
 # ---- argument parsing -----------------------------------------------------
-HOST="" PORT="" PUBKEY="" VIA="" BOX_ALIAS="" ASSUME_YES=0 SETUP_ONLY=0
+HOST="" PORT="" PUBKEY="" VIA="" BOX_ALIAS="" BOX_SSH_CONFIG="" ASSUME_YES=0 SETUP_ONLY=0
 BOX_USER="" REMOTE_MP="" LAUNCH="claude" PROJ_DIR_ARG=""
 YOLO=0; EFF_LAUNCH=""; LAUNCH_BASE="claude"
 while [ $# -gt 0 ]; do
@@ -56,6 +59,7 @@ while [ $# -gt 0 ]; do
     --launch)        need_arg "$1" "${2-}"; LAUNCH="$2";         shift 2;;   # CLI to start on the remote (claude/codex/opencode)
     --yolo)          YOLO=1;              shift;;     # bypass approvals on the launched agent
     --box-alias)     need_arg "$1" "${2-}"; BOX_ALIAS="$2";      shift 2;;
+    --box-ssh-config) need_arg "$1" "${2-}"; BOX_SSH_CONFIG="$2"; shift 2;;
     --box-user)      need_arg "$1" "${2-}"; BOX_USER="$2";       shift 2;;
     --remote-mountpoint) need_arg "$1" "${2-}"; REMOTE_MP="$2";  shift 2;;   # exact box dir to mount at (e.g. your invoking cwd)
     --project-dir)   need_arg "$1" "${2-}"; PROJ_DIR_ARG="$2";   shift 2;;   # laptop project dir (skip the interactive prompt)
@@ -79,12 +83,45 @@ else printf 'error: missing _common.sh next to %s — re-copy the full command\n
 
 # ---- auto-cleanup on exit/disconnect ---------------------------------------
 TUNNEL_PID=""; MOUNTED=0; CLEANED=0; RULE_INJECTED=0
-# The box logs into THIS laptop as the box alias's `User`, and Phase 1 authorizes the box key into
-# OUR account's authorized_keys — so the login user must be US. The laptop's own `id -un` is the
-# single source of truth (whatever the box-side setup guessed, e.g. from a project path); we force the
-# box alias to it in Phase 2.
+LOCAL_SESSION_DIR=""; LOCAL_SSH_CONFIG=""
+# The box logs into THIS laptop as the box alias's `User`, so the login user must be US. The laptop's
+# own `id -un` is the single source of truth (whatever the box-side setup guessed, e.g. from a
+# project path); we force the box alias to it in Phase 2. In the simple reverse flow remote-harness
+# may temporarily authorize the box's generated key in ~/.ssh/authorized_keys, with a scoped managed
+# block that is removed on exit.
 LAPTOP_USER="$(id -un 2>/dev/null || echo user)"
 
+box_ssh_f_arg() {
+  [ -n "${BOX_SSH_CONFIG:-}" ] && printf -- '-F %s' "$(sq "$BOX_SSH_CONFIG")"
+}
+box_check_config_arg() {
+  [ -n "${BOX_SSH_CONFIG:-}" ] && printf ' --ssh-config %s' "$(sq "$BOX_SSH_CONFIG")"
+}
+box_setup_config_arg() {
+  [ -n "${BOX_SSH_CONFIG:-}" ] && printf ' --config %s' "$(sq "$BOX_SSH_CONFIG")"
+}
+ssh_uses_session_config() {
+  [ -n "${LOCAL_SSH_CONFIG:-}" ] && [ -n "${TARGET:-}" ] || return 1
+  local _need_value=0 _target="" _arg
+  for _arg in "$@"; do
+    if [ "$_need_value" = 1 ]; then _need_value=0; continue; fi
+    case "$_arg" in
+      -F|-F*) return 1;;
+      -b|-c|-D|-E|-e|-I|-i|-J|-L|-l|-m|-O|-o|-p|-Q|-R|-S|-W|-w) _need_value=1; continue;;
+      -b*|-c*|-D*|-E*|-e*|-I*|-i*|-J*|-L*|-l*|-m*|-O*|-o*|-p*|-Q*|-R*|-S*|-W*|-w*) continue;;
+      -*) continue;;
+      *) _target="$_arg"; break;;
+    esac
+  done
+  [ "$_target" = "$TARGET" ]
+}
+ssh() {
+  if ssh_uses_session_config "$@"; then
+    command ssh -F "$LOCAL_SSH_CONFIG" "$@"
+  else
+    command ssh "$@"
+  fi
+}
 # Path to the per-(box,port) pid file recording WHO owns the reverse tunnel (the live `ssh -N` pid),
 # so the LAST session out can drop it even if it didn't create it — same-user multi-project, where a
 # second session reuses the tunnel. Keyed by TARGET+PORT (evaluated at call time, after they're set).
@@ -104,6 +141,168 @@ tunnel_still_needed() {
   [ "${_cnt:-0}" -gt 0 ]
 }
 
+# -- temporary authorized_keys management -----------------------------------
+# The only intentional ~/.ssh write in the simple reverse path is a tagged,
+# loopback-scoped authorized_keys block for the remote-harness key generated on
+# the box. Everything else (ssh config, known_hosts, ControlPath) remains under
+# ~/.remote-harness.
+AUTHKEY_TYPE="" AUTHKEY_BLOB="" AUTHKEY_TAG="" AUTHKEY_BEGIN="" AUTHKEY_END=""
+AUTHKEY_REF_DIR="" AUTHKEY_TOKEN="" AUTHKEY_MANAGED=0 AUTHKEY_LOCK_DIR="" AUTHKEY_LOCK_HELD=0
+
+authkey_lock() {
+  [ "$AUTHKEY_LOCK_HELD" = 1 ] && return 0
+  AUTHKEY_LOCK_DIR="$HOME/.remote-harness/.locks/authorized_keys.lock.d"
+  mkdir -p "$(dirname "$AUTHKEY_LOCK_DIR")" 2>/dev/null || return 1
+  _n=0
+  while ! mkdir "$AUTHKEY_LOCK_DIR" 2>/dev/null; do
+    _n=$((_n + 1))
+    [ "$_n" -ge 30 ] && return 1
+    sleep 1
+  done
+  AUTHKEY_LOCK_HELD=1
+  return 0
+}
+
+authkey_unlock() {
+  [ "$AUTHKEY_LOCK_HELD" = 1 ] || return 0
+  rmdir "$AUTHKEY_LOCK_DIR" 2>/dev/null || true
+  AUTHKEY_LOCK_HELD=0
+}
+
+parse_pubkey_for_authorized_keys() {
+  [ -n "$PUBKEY" ] || return 1
+  case "$PUBKEY" in *'
+'*) warn "box public key contains a newline; not modifying authorized_keys"; return 1;; esac
+  # shellcheck disable=SC2086 # deliberate field split of the public key line.
+  set -- $PUBKEY
+  AUTHKEY_TYPE="${1:-}"
+  AUTHKEY_BLOB="${2:-}"
+  case "$AUTHKEY_TYPE" in
+    ssh-ed25519|ssh-rsa|ecdsa-sha2-*|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-nistp256@openssh.com) ;;
+    *) warn "box public key type is not recognized: ${AUTHKEY_TYPE:-<empty>}"; return 1;;
+  esac
+  [ -n "$AUTHKEY_BLOB" ] || { warn "box public key is missing key material"; return 1; }
+  case "$AUTHKEY_BLOB" in *[!A-Za-z0-9+/=]*|"") warn "box public key material is invalid"; return 1;; esac
+  AUTHKEY_TAG="$(printf '%s %s' "$AUTHKEY_TYPE" "$AUTHKEY_BLOB" | cksum | awk '{print $1 "-" $2}')"
+  AUTHKEY_BEGIN="# >>> remote-harness:reverse-auth:$AUTHKEY_TAG >>>"
+  AUTHKEY_END="# <<< remote-harness:reverse-auth:$AUTHKEY_TAG <<<"
+  AUTHKEY_REF_DIR="$HOME/.remote-harness/.sessions/authorized-keys/$AUTHKEY_TAG"
+  AUTHKEY_TOKEN="$AUTHKEY_REF_DIR/$$.$(date +%s 2>/dev/null || echo now)"
+  return 0
+}
+
+authorized_key_match() {
+  _ak_scope="$1"
+  _ak_file="$2"
+  [ -r "$_ak_file" ] || return 1
+  awk -v t="$AUTHKEY_TYPE" -v k="$AUTHKEY_BLOB" -v b="$AUTHKEY_BEGIN" -v e="$AUTHKEY_END" -v scope="$_ak_scope" '
+    $0==b {managed=1; next}
+    $0==e {managed=0; next}
+    /^[[:space:]]*($|#)/ {next}
+    {
+      line_has_key=0
+      for (i=1; i<NF; i++) {
+        if ($i==t && $(i+1)==k) line_has_key=1
+      }
+      if (line_has_key && (scope=="any" || (scope=="managed" && managed) || (scope=="user" && !managed))) found=1
+    }
+    END {exit found ? 0 : 1}
+  ' "$_ak_file"
+}
+
+write_authorized_keys_without_managed_block() {
+  _ak_file="$1"
+  _ak_dir="$(dirname "$_ak_file")"
+  mkdir -p "$_ak_dir" 2>/dev/null || return 1
+  chmod 700 "$_ak_dir" 2>/dev/null || true
+  _ak_tmp="$(mktemp "$_ak_dir/.authorized_keys.XXXXXX" 2>/dev/null)" || return 1
+  if [ -f "$_ak_file" ]; then
+    awk -v b="$AUTHKEY_BEGIN" -v e="$AUTHKEY_END" '
+      $0==b {skip=1; next}
+      $0==e {skip=0; next}
+      skip!=1 {print}
+    ' "$_ak_file" > "$_ak_tmp" || { rm -f "$_ak_tmp"; return 1; }
+  fi
+  chmod 600 "$_ak_tmp" 2>/dev/null || true
+  mv "$_ak_tmp" "$_ak_file"
+}
+
+append_managed_authorized_key() {
+  _ak_file="$1"
+  write_authorized_keys_without_managed_block "$_ak_file" || return 1
+  {
+    [ -s "$_ak_file" ] && printf '\n'
+    printf '%s\n' "$AUTHKEY_BEGIN"
+    printf '# scope: remote-harness reverse tunnel; source limited to laptop loopback via from=127.0.0.1,::1\n'
+    printf 'from="127.0.0.1,::1",no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-pty %s %s remote-harness:reverse:%s\n' \
+      "$AUTHKEY_TYPE" "$AUTHKEY_BLOB" "$AUTHKEY_TAG"
+    printf '%s\n' "$AUTHKEY_END"
+  } >> "$_ak_file" || return 1
+  chmod 600 "$_ak_file" 2>/dev/null || true
+}
+
+prepare_reverse_authorized_key() {
+  if [ -z "$PUBKEY" ]; then
+    warn "No remote-harness public key was provided; the box must already be authorized to SSH back to this laptop."
+    return 0
+  fi
+  parse_pubkey_for_authorized_keys || return 1
+  _ak_file="$HOME/.ssh/authorized_keys"
+
+  authkey_lock || { warn "could not lock authorized_keys; not modifying SSH authorization"; return 1; }
+  if authorized_key_match user "$_ak_file"; then
+    ok "authorized_keys: matching key already exists outside remote-harness; leaving it untouched"
+    authkey_unlock
+    AUTHKEY_TOKEN=""
+    return 0
+  fi
+
+  mkdir -p "$AUTHKEY_REF_DIR" 2>/dev/null || { authkey_unlock; return 1; }
+  printf 'pid=%s\nstarted=%s\n' "$$" "$(date 2>/dev/null || true)" > "$AUTHKEY_TOKEN" 2>/dev/null || {
+    authkey_unlock
+    return 1
+  }
+  AUTHKEY_MANAGED=1
+
+  if authorized_key_match managed "$_ak_file"; then
+    ok "authorized_keys: reusing existing remote-harness temporary authorization"
+    authkey_unlock
+    return 0
+  fi
+
+  if append_managed_authorized_key "$_ak_file"; then
+    ok "authorized_keys: temporarily authorized the box key for this reverse session"
+    authkey_unlock
+    return 0
+  fi
+
+  rm -f "$AUTHKEY_TOKEN" 2>/dev/null || true
+  AUTHKEY_TOKEN=""
+  AUTHKEY_MANAGED=0
+  authkey_unlock
+  warn "could not update ~/.ssh/authorized_keys"
+  return 1
+}
+
+cleanup_reverse_authorized_key() {
+  [ -n "${AUTHKEY_TOKEN:-}" ] || return 0
+  authkey_lock || { warn "could not lock authorized_keys for cleanup; temporary authorization may remain"; return 0; }
+  rm -f "$AUTHKEY_TOKEN" 2>/dev/null || true
+  if [ -d "$AUTHKEY_REF_DIR" ] && find "$AUTHKEY_REF_DIR" -type f -print -quit 2>/dev/null | grep -q .; then
+    authkey_unlock
+    return 0
+  fi
+  rmdir "$AUTHKEY_REF_DIR" 2>/dev/null || true
+  if [ "$AUTHKEY_MANAGED" = 1 ] && [ -f "$HOME/.ssh/authorized_keys" ]; then
+    if write_authorized_keys_without_managed_block "$HOME/.ssh/authorized_keys"; then
+      ok "authorized_keys: temporary remote-harness authorization removed"
+    else
+      warn "could not remove temporary remote-harness authorized_keys block"
+    fi
+  fi
+  authkey_unlock
+}
+
 cleanup() {
   [ "$CLEANED" = 1 ] && return 0
   CLEANED=1
@@ -113,12 +312,26 @@ cleanup() {
     ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 "${TARGET:-}" "
       rh=\"\${RH_HOME:-\$HOME/.remote-harness}\"
       \"\$rh/scripts/mount-project.sh\" --alias $(sq "${BOX_ALIAS:-}") --unmount --mountpoint $(sq "${REMOTE_MOUNTPOINT:-}")
+      mp=$(sq "${REMOTE_MOUNTPOINT:-}")
+      case \"\$mp\" in \"\$rh/mounts/\"*) rmdir \"\$mp\" 2>/dev/null || true;; esac
     " >/dev/null 2>&1 && ok "Unmounted" || warn "auto-unmount failed — mount may be stale on the box (next run re-validates it)"
   fi
   if [ "${RULE_INJECTED:-0}" = 1 ]; then
     ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 "${TARGET:-}" \
       "\"\${RH_HOME:-\$HOME/.remote-harness}/scripts/inject-rule.sh\" off $(sq "${LAUNCH_BASE:-claude}") $(sq "${REMOTE_MOUNTPOINT:-}")" >/dev/null 2>&1 \
-      && ok "session-scoped rule + temp config removed" || true
+      && ok "session-scoped rule removed" || true
+  fi
+  if [ -n "${BOX_SSH_CONFIG:-}" ] && [ -n "${TARGET:-}" ]; then
+    ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 "${TARGET:-}" "
+      cfg=$(sq "$BOX_SSH_CONFIG")
+      case \"\$cfg\" in
+        */.remote-harness/.sessions/*/ssh_config)
+          dir=\$(dirname \"\$cfg\")
+          rm -f \"\$cfg\" \"\$dir\"/known_hosts_* \"\$dir\"/cm-* 2>/dev/null || true
+          rmdir \"\$dir\" 2>/dev/null || true
+          ;;
+      esac
+    " >/dev/null 2>&1 && ok "box temp ssh config removed" || true
   fi
   # Drop the reverse tunnel ONLY when no other session still rides it. Whoever exits LAST tears it
   # down — via the creator's pid file (the live `ssh -N` pid persists as an orphan after an early
@@ -133,6 +346,11 @@ cleanup() {
       [ -n "$_pid" ] && kill "$_pid" 2>/dev/null || true
       rm -f "$_sp" 2>/dev/null || true
     fi
+  fi
+  cleanup_reverse_authorized_key
+  if [ -n "${LOCAL_SESSION_DIR:-}" ]; then
+    rm -rf "$LOCAL_SESSION_DIR" 2>/dev/null || true
+    ok "local temp ssh config removed"
   fi
 }
 
@@ -156,7 +374,7 @@ if [ "$YOLO" = 1 ]; then
 fi
 
 # ===========================================================================
-# Phase 1: SSH server, authorized key, RemoteForward in ~/.ssh/config
+# Phase 1: SSH server check, user-managed auth note, RemoteForward in session ssh config
 # ===========================================================================
 
 # -- parse --via into V_HOST/V_PORT/V_USER/V_IDENTITY (parse_via from _common.sh) --
@@ -172,21 +390,15 @@ parse_via "$VIA"
 [ -z "$HOST" ] || safe_ssh_token "$HOST" || { printf 'unsafe --host: %s\n' "$HOST" >&2; exit 2; }
 [ -z "$BOX_ALIAS" ] || safe_ssh_token "$BOX_ALIAS" || { printf 'unsafe --box-alias: %s\n' "$BOX_ALIAS" >&2; exit 2; }
 [ -z "$BOX_USER" ] || safe_ssh_token "$BOX_USER" || { printf 'unsafe --box-user: %s\n' "$BOX_USER" >&2; exit 2; }
+case "$BOX_SSH_CONFIG" in *'
+'*) printf 'box ssh config path contains a newline\n' >&2; exit 2;; esac
 
-# -- obtain the box's public key --
-if [ -z "$PUBKEY" ]; then
-  KCMD='cat ~/.remote-harness/.tunnel-pubkey 2>/dev/null || cat ~/.ssh/id_ed25519.pub 2>/dev/null'
-  if [ -n "$VIA" ]; then
-    # $VIA is intentionally unquoted so it word-splits into ssh args; NOT eval'd (avoids running
-    # shell metacharacters in a mistyped/crafted connect string locally).
-    PUBKEY="$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10 $VIA "$KCMD" 2>/dev/null || true)"
-  elif [ -n "$HOST" ]; then
-    PUBKEY="$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10 "$HOST" "$KCMD" 2>/dev/null || true)"
-  fi
-  PUBKEY="$(printf '%s' "$PUBKEY" | sed -n '1p')"
+# -- SSH authentication boundary -------------------------------------------
+if [ -n "$PUBKEY" ]; then
+  ok "box key visible: $(printf '%s' "$PUBKEY" | awk '{print $1, substr($2,1,14)"...", $3}')"
 fi
-[ -n "$PUBKEY" ] && ok "box key: $(printf '%s' "$PUBKEY" | awk '{print $1, substr($2,1,14)"...", $3}')" \
-                 || warn "no box key found — authorized_keys step will be skipped"
+say  "  Reverse auth: remote-harness may add a tagged temporary entry to ~/.ssh/authorized_keys."
+say  "  If a matching active key already exists, it will be reused and left untouched."
 
 # -- ensure SSH server running --
 ssh_listening() { (exec 3<>/dev/tcp/127.0.0.1/22) 2>/dev/null && { exec 3>&-; return 0; }; return 1; }
@@ -227,40 +439,8 @@ else
                 || warn "still not listening on :22 — the tunnel won't work without it"
 fi
 
-# -- authorize box key --
-mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh" 2>/dev/null || true
-AK="$HOME/.ssh/authorized_keys"; touch "$AK"; chmod 600 "$AK" 2>/dev/null || true
-if [ -n "$PUBKEY" ]; then
-  keybody="$(printf '%s' "$PUBKEY" | awk '{print $1" "$2}')"
-  if grep -qF "$keybody" "$AK" 2>/dev/null; then ok "authorized_keys: box key already present"
-  else printf '%s\n' "$PUBKEY" >> "$AK"; ok "authorized_keys: added box key"; fi
-fi
-
-# -- write RemoteForward to ~/.ssh/config --
-CFG="$HOME/.ssh/config"; touch "$CFG"; chmod 600 "$CFG" 2>/dev/null || true
-TARGET=""   # block_exists / remove_host_block / write_managed_alias come from _common.sh
-
-legacy_host_has_rh_forward() {
-  local _host="$1"
-  [ -f "$CFG" ] || return 1
-  awk -v host="$_host" '
-    function H(s){return s~/^[ \t]*[Hh][Oo][Ss][Tt][ \t]/}
-    H($0){hit=0;n=split($0,a,/[ \t]+/);for(i=2;i<=n;i++){if(a[i]=="#")break;if(a[i]==host)hit=1}}
-    hit&&$0~/^[ \t]*RemoteForward[ \t]+[0-9]+[ \t]+127\.0\.0\.1:22[ \t]*$/ {found=1}
-    END{exit !found}
-  ' "$CFG"
-}
-remove_legacy_host_forward() {
-  local _host="$1" _tmp
-  _tmp="$(mktemp)"
-  awk -v host="$_host" '
-    function H(s){return s~/^[ \t]*[Hh][Oo][Ss][Tt][ \t]/}
-    H($0){hit=0;n=split($0,a,/[ \t]+/);for(i=2;i<=n;i++){if(a[i]=="#")break;if(a[i]==host)hit=1};print;next}
-    hit&&$0~/^[ \t]*RemoteForward[ \t]+[0-9]+[ \t]+127\.0\.0\.1:22[ \t]*$/ {next}
-    hit&&$0~/^[ \t]*(ServerAliveInterval|ServerAliveCountMax|ExitOnForwardFailure|TCPKeepAlive)([ \t]|$)/ {next}
-    {print}
-  ' "$CFG" > "$_tmp" && mv "$_tmp" "$CFG"
-}
+# -- write RemoteForward to a session-local ssh config --
+TARGET=""   # write_managed_alias comes from _common.sh and writes to $CFG.
 load_effective_ssh_alias() {
   local _alias="$1" _cfg _identity
   _cfg="$(ssh -G "$_alias" 2>/dev/null || true)"
@@ -277,41 +457,43 @@ load_effective_ssh_alias() {
 $(printf '%s\n' "$_cfg" | awk 'tolower($1)=="identityfile"{print $2}')
 EOF
 }
-# The --via connection is the GROUND TRUTH for how to reach the box. Use a DEDICATED managed alias
-# for the harness connection even when --via is a normal `Host <alias>` alias; otherwise ordinary
-# `ssh <alias>` inherits RemoteForward and fails while a harness tunnel already owns the port.
-cp "$CFG" "$CFG.rh-bak.$(date +%Y%m%d%H%M%S 2>/dev/null || echo bak)" 2>/dev/null || true
+# The --via connection is the GROUND TRUTH for how to reach the box. Use a DEDICATED session-local
+# alias for the harness connection even when --via is a normal `Host <alias>` alias; ordinary
+# `ssh <alias>` remains untouched.
 RAW_CONN=0; { [ -n "$V_PORT" ] || [ -n "$V_USER" ] || [ -n "$V_IDENTITY" ] || [ -n "$V_PROXYJUMP" ]; } && RAW_CONN=1
-if [ "$RAW_CONN" = 0 ] && [ -n "$HOST" ] && block_exists "$HOST"; then
+if [ "$RAW_CONN" = 0 ] && [ -n "$HOST" ]; then
   load_effective_ssh_alias "$HOST" || warn "ssh config: could not resolve Host '$HOST' with ssh -G; using it as HostName"
-  if legacy_host_has_rh_forward "$HOST"; then
-    remove_legacy_host_forward "$HOST" \
-      && ok "ssh config: removed legacy remote-harness RemoteForward from existing 'Host $HOST'" \
-      || warn "ssh config: could not remove legacy RemoteForward from 'Host $HOST'"
-  fi
 fi
 [ -z "${V_HOST:-}" ] || safe_ssh_token "$V_HOST" || { printf 'unsafe resolved ssh HostName: %s\n' "$V_HOST" >&2; exit 2; }
 [ -z "${V_USER:-}" ] || safe_ssh_token "$V_USER" || { printf 'unsafe resolved ssh User: %s\n' "$V_USER" >&2; exit 2; }
 [ -z "${V_PROXYJUMP:-}" ] || safe_ssh_token "$V_PROXYJUMP" || { printf 'unsafe resolved ssh ProxyJump: %s\n' "$V_PROXYJUMP" >&2; exit 2; }
 TARGET="${HOST:-${BOX_USER:-${V_USER:-box}}}-remote-harness"
+safe_target="$(printf '%s' "$TARGET" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._-]*//; s/[._-]*$//')"
+[ -n "$safe_target" ] || safe_target=box
+mkdir -p "$HOME/.remote-harness/.sessions" 2>/dev/null || true
+LOCAL_SESSION_DIR="$(mktemp -d "$HOME/.remote-harness/.sessions/reverse-${safe_target}.XXXXXX")" || exit 2
+LOCAL_SSH_CONFIG="$LOCAL_SESSION_DIR/ssh_config"
+CFG="$LOCAL_SSH_CONFIG"; touch "$CFG"; chmod 600 "$CFG" 2>/dev/null || true
+write_session_ssh_defaults "$LOCAL_SESSION_DIR"
 write_target_forward() {
   local _port="$1" _rf_line
   _rf_line="    RemoteForward $_port 127.0.0.1:22"
-  # Create-or-replace a DEDICATED managed alias carrying the exact --via identity + RemoteForward
-  # (idempotent). Keepalives so a half-open tunnel (NAT idle / laptop sleep) is detected;
+  # Create-or-replace a DEDICATED session alias carrying the exact --via identity + RemoteForward.
+  # Keepalives so a half-open tunnel (NAT idle / laptop sleep) is detected;
   # ExitOnForwardFailure so a port-collision fails loudly instead of leaving a live-but-no-forward
   # connection that polls as "up".
   if write_managed_alias "$TARGET" "$_rf_line" \
       "    ServerAliveInterval 30" "    ServerAliveCountMax 3" \
-      "    ExitOnForwardFailure yes" "    TCPKeepAlive yes"; then
-    ok "ssh config: wrote managed 'Host $TARGET' (HostName ${V_HOST:-?}, port ${V_PORT:-22}, user ${V_USER:-<login default>}) + RemoteForward $_port"
+      "    ExitOnForwardFailure yes" "    TCPKeepAlive yes" \
+      "    ForwardAgent yes"; then
+    ok "ssh config: prepared session Host '$TARGET' (HostName ${V_HOST:-?}, port ${V_PORT:-22}, user ${V_USER:-<login default>}) + RemoteForward $_port"
   else
-    err "ssh config: could not write managed Host '$TARGET'"
+    err "ssh config: could not write session Host '$TARGET'"
     return 1
   fi
 }
 write_target_forward "$PORT" || exit 2
-say "    Reconnect to the box via: ${_B}ssh $TARGET${_0}"
+say "    Session ssh alias: ${_B}ssh $TARGET${_0}"
 chmod 600 "$CFG" 2>/dev/null || true
 
 # -- default box-alias --
@@ -324,20 +506,23 @@ fi
 sep
 if [ "$SETUP_ONLY" = 1 ]; then
   ok "Phase 1 done (--setup-only)."
-  say "  Reconnect: ${_B}ssh -O exit $TARGET 2>/dev/null; ssh $TARGET${_0}"
+  say "  Session config: ${_B}$LOCAL_SSH_CONFIG${_0}"
+  say "  Reconnect: ${_B}ssh -F $(sq "$LOCAL_SSH_CONFIG") -O exit $TARGET 2>/dev/null; ssh -F $(sq "$LOCAL_SSH_CONFIG") $TARGET${_0}"
   exit 0
 fi
+[ -n "$BOX_SSH_CONFIG" ] || {
+  err "need --box-ssh-config for a full reverse session; run through simple-laptop-setup.sh"
+  exit 2
+}
+trap cleanup EXIT INT TERM HUP   # auto-cleanup for authorization, mount, rule, config, tunnel
+prepare_reverse_authorized_key || exit 1
 
 # ===========================================================================
 # Phase 2: Reconnect — establish the reverse tunnel automatically
 # ===========================================================================
 hdr "Phase 2: establishing tunnel"
-# Kill existing master connections to the old target
-[ -n "$HOST" ] && [ "$HOST" != "$TARGET" ] && ssh -O exit "$HOST" 2>/dev/null || true
+# Kill the session-local master connection to the harness target, if any.
 ssh -O exit "$TARGET" 2>/dev/null || true
-if [ -n "$VIA" ]; then ssh -O exit $VIA 2>/dev/null || true; fi   # $VIA unquoted to word-split; not eval'd
-
-trap cleanup EXIT INT TERM HUP   # auto-unmount + drop the tunnel when this script exits
 
 remote_port_listening() {
   local _port="$1"
@@ -354,9 +539,9 @@ tunnel_alias_up() {
   out=$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 "$TARGET" "
     rh=\"\${RH_HOME:-\$HOME/.remote-harness}\"
     if [ -x \"\$rh/scripts/check-tunnel.sh\" ]; then
-      \"\$rh/scripts/check-tunnel.sh\" --alias $(sq "$BOX_ALIAS") --port $(sq "$_port")
+      \"\$rh/scripts/check-tunnel.sh\" --alias $(sq "$BOX_ALIAS") --port $(sq "$_port")$(box_check_config_arg)
     else
-      ssh -o BatchMode=yes -o ConnectTimeout=5 $(sq "$BOX_ALIAS") 'printf \"RH_OK %s %s\" \"\$(hostname 2>/dev/null)\" \"\$(id -un 2>/dev/null)\"'
+      ssh $(box_ssh_f_arg) -o BatchMode=yes -o ConnectTimeout=5 $(sq "$BOX_ALIAS") 'printf \"RH_OK %s %s\" \"\$(hostname 2>/dev/null)\" \"\$(id -un 2>/dev/null)\"'
     fi
   " 2>/dev/null || true)
   if printf '%s\n' "$out" | grep -q '^SSH=up'; then
@@ -392,7 +577,7 @@ find_next_remote_port() {
 
 remote_box_alias_info() {
   ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 "$TARGET" "
-    cfg=\$(ssh -G $(sq "$BOX_ALIAS") 2>/dev/null || true)
+    cfg=\$(ssh $(box_ssh_f_arg) -G $(sq "$BOX_ALIAS") 2>/dev/null || true)
     user=\$(printf '%s\n' \"\$cfg\" | awk 'tolower(\$1)==\"user\"{print \$2; exit}')
     identity=\$(printf '%s\n' \"\$cfg\" | awk 'tolower(\$1)==\"identityfile\"{print \$2; exit}')
     case \"\$identity\" in \"~/\"*) identity=\"\$HOME/\${identity#~/}\";; esac
@@ -409,7 +594,7 @@ update_box_alias_port() {
   out=$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" "
     rh=\"\${RH_HOME:-\$HOME/.remote-harness}\"
     [ -x \"\$rh/scripts/setup-tunnel.sh\" ] || { printf 'ERROR=missing setup-tunnel.sh\n'; exit 2; }
-    \"\$rh/scripts/setup-tunnel.sh\" --alias $(sq "$BOX_ALIAS") --port $(sq "$_port") --user $(sq "$LAPTOP_USER")$identity_arg
+    \"\$rh/scripts/setup-tunnel.sh\"$(box_setup_config_arg) --alias $(sq "$BOX_ALIAS") --port $(sq "$_port") --user $(sq "$LAPTOP_USER")$identity_arg
   " 2>&1) || {
     err "Could not update remote alias '$BOX_ALIAS' to port $_port."
     printf '%s\n' "$out" >&2
@@ -431,7 +616,7 @@ ensure_box_alias_user() {
   out=$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" "
     rh=\"\${RH_HOME:-\$HOME/.remote-harness}\"
     [ -x \"\$rh/scripts/setup-tunnel.sh\" ] || { printf 'ERROR=missing setup-tunnel.sh\n'; exit 2; }
-    \"\$rh/scripts/setup-tunnel.sh\" --alias $(sq "$BOX_ALIAS") --port $(sq "$PORT") --user $(sq "$LAPTOP_USER")$identity_arg
+    \"\$rh/scripts/setup-tunnel.sh\"$(box_setup_config_arg) --alias $(sq "$BOX_ALIAS") --port $(sq "$PORT") --user $(sq "$LAPTOP_USER")$identity_arg
   " 2>&1) \
     && ok "box alias: login user set to '$LAPTOP_USER' (this laptop account)" \
     || { warn "could not set box alias '$BOX_ALIAS' login user to '$LAPTOP_USER'"; printf '%s\n' "$out" >&2; }
@@ -593,14 +778,13 @@ hdr "Phase 4: mounting on remote"
 
 # Determine the remote mountpoint:
 #  - explicit --remote-mountpoint (e.g. the dir you invoked /remote-harness from) wins;
-#  - otherwise default to <remote $HOME>/work/<project-name>.
+#  - otherwise default to <remote $RH_HOME>/mounts/<project-name>.
 if [ -n "$REMOTE_MP" ]; then
   REMOTE_MOUNTPOINT="$REMOTE_MP"
 else
   REMOTE_MOUNTPOINT=$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" \
-    "printf '%s/work/%s' \"\$HOME\" $(sq "$PROJ_NAME")" 2>/dev/null || true)
-  # /home/<user> is wrong on macOS (/Users); fall back to a generic message rather than a bad path.
-  [ -z "$REMOTE_MOUNTPOINT" ] && { warn "could not resolve remote \$HOME; please pass --remote-mountpoint <empty-dir>"; exit 1; }
+    "rh=\"\${RH_HOME:-\$HOME/.remote-harness}\"; printf '%s/mounts/%s' \"\$rh\" $(sq "$PROJ_NAME")" 2>/dev/null || true)
+  [ -z "$REMOTE_MOUNTPOINT" ] && { warn "could not resolve remote RH_HOME; please pass --remote-mountpoint <empty-dir>"; exit 1; }
 fi
 
 # Mount, with interactive retry: a recoverable failure (sshfs missing / target not empty) loops
@@ -613,7 +797,7 @@ while :; do
     \"\$rh/scripts/mount-project.sh\" \
       --alias $(sq "$BOX_ALIAS") \
       --remote-path $(sq "$PROJ_DIR") \
-      --mountpoint $(sq "$REMOTE_MOUNTPOINT")
+      --mountpoint $(sq "$REMOTE_MOUNTPOINT")$(box_check_config_arg)
   " 2>/dev/null || true)
   STATUS=$(printf '%s\n' "$MOUNT_OUT" | awk -F= '/^STATUS=/{print $2; exit}')
   case "$STATUS" in
@@ -652,17 +836,11 @@ while :; do
 done
 
 # AGENTS.md-only project: only matters for Claude Code (reads CLAUDE.md, not AGENTS.md); codex and
-# opencode read AGENTS.md natively, so skip them. Creating CLAUDE.md writes a file INTO your laptop
-# repo and is NOT auto-removed on exit — hence opt-in and clearly flagged.
+# opencode read AGENTS.md natively. remote-harness does not create repo guidance files implicitly.
 AGENTS_ONLY=$(printf '%s\n' "$MOUNT_OUT" | awk -F= '/^AGENTS_MD_ONLY=/{print $2; exit}')
 if [ "$AGENTS_ONLY" = 1 ] && [ "$LAUNCH_BASE" = claude ]; then
   say ""
-  say "  Note: this project has AGENTS.md but no CLAUDE.md, and Claude Code reads CLAUDE.md."
-  if ask "  Create CLAUDE.md (importing @AGENTS.md) IN YOUR LAPTOP REPO? (not auto-removed)"; then
-    ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 "$TARGET" \
-      "printf '@AGENTS.md\n' > $(sq "$REMOTE_MOUNTPOINT/CLAUDE.md")" 2>/dev/null \
-      && ok "CLAUDE.md created in the repo" || warn "could not create CLAUDE.md — do it manually"
-  fi
+  warn "this project has AGENTS.md but no CLAUDE.md; Claude Code may not read that guidance."
 fi
 
 # ===========================================================================
@@ -674,7 +852,7 @@ fi
 # an env/config prefix (Codex developer_instructions / OPENCODE_CONFIG) for codex/opencode. For opencode, YOLO's
 # permission=allow is folded into that per-session config too.
 rh_out=$(ssh -n -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=8 "$TARGET" \
-     "\"\${RH_HOME:-\$HOME/.remote-harness}/scripts/inject-rule.sh\" on $(sq "$LAUNCH_BASE") $(sq "$PROJ_DIR") $(sq "$BOX_ALIAS") $(sq "$REMOTE_MOUNTPOINT") $(sq "$YOLO")" \
+     "\"\${RH_HOME:-\$HOME/.remote-harness}/scripts/inject-rule.sh\" on $(sq "$LAUNCH_BASE") $(sq "$PROJ_DIR") $(sq "$BOX_ALIAS") $(sq "$REMOTE_MOUNTPOINT") $(sq "$YOLO") $(sq "$BOX_SSH_CONFIG")" \
      2>/dev/null || printf 'RH_STATUS=ERROR\n')
 rh_status=$(printf '%s\n' "$rh_out" | sed -n 's/^RH_STATUS=//p' | head -1)
 if [ "$rh_status" = INJECTED ]; then
@@ -695,8 +873,22 @@ sep
 # Use a LOGIN+INTERACTIVE shell so the remote PATH (e.g. ~/.local/bin from ~/.profile / ~/.zshrc)
 # is sourced — `ssh host cmd` alone runs a non-login non-interactive shell and won't find claude.
 # ClearAllForwardings=yes: don't re-request the RemoteForward (Phase 2's tunnel already holds it).
-ssh -t -o ClearAllForwardings=yes "$TARGET" \
-  "cd $(sq "$REMOTE_MOUNTPOINT") && exec \"\${SHELL:-/bin/bash}\" -lic $(sq "$EFF_LAUNCH")"
+# The simple bootstrap path runs this script from a pipe (`ssh cat ... | bash -s`), so stdin is not
+# a terminal even though the user has a controlling tty. Attach the final interactive ssh to
+# /dev/tty explicitly; otherwise OpenSSH refuses to allocate a pty and TUI agents fail immediately.
+launch_remote_agent() {
+  local _remote_cmd _rc
+  _remote_cmd="cd $(sq "$REMOTE_MOUNTPOINT") && exec \"\${SHELL:-/bin/bash}\" -lic $(sq "$EFF_LAUNCH")"
+  if { exec 3</dev/tty; } 2>/dev/null; then
+    ssh -tt -o ClearAllForwardings=yes "$TARGET" "$_remote_cmd" <&3
+    _rc=$?
+    exec 3<&-
+    return "$_rc"
+  fi
+  warn "no controlling tty found; remote ${LAUNCH} TUI may not start"
+  ssh -tt -o ClearAllForwardings=yes "$TARGET" "$_remote_cmd"
+}
+launch_remote_agent
 CLAUDE_EXIT=$?
 
 # ===========================================================================

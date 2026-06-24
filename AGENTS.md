@@ -9,29 +9,130 @@ is for agents *developing* remote-harness itself.
 
 ## Repo layout
 
-- `SKILL.md` — lean skill entry point (overview, interaction rules, direction pick). **Progressive
-  disclosure**: per-direction flow + script contracts live under `reference/`.
-- `reference/{reverse,forward,scripts}.md` — the detailed flows and helper-script contracts, read on
-  demand by the agent at runtime via `$RH/reference/<file>.md` (`RH=${RH_HOME:-$HOME/.remote-harness}`).
+- `SKILL.md` — lean simple-mode skill entry point. By default it emits one local bootstrap command;
+  it must not ask the agent to collect SSH targets, paths, ports, or namespaces.
+- `reference/{reverse,forward,scripts}.md` — current simple reverse/forward behavior and
+  helper-script contracts. These are reference docs, not old Agent-guided runbooks.
 - `scripts/*.sh` — the deterministic helpers (KEY=VALUE on stdout, notes on stderr). `_common.sh` is
-  a sourced library (not an entry point). `laptop-setup.sh` (reverse) / `local-setup.sh` (forward)
-  are the orchestrators; `mount-project.sh` + `inject-rule.sh` + `list-projects.sh` are reused by both.
+  a sourced library (not an entry point). `simple-bootstrap.sh` is the public unified simple entry
+  point; it can run from a local install or be fetched from a remote skill install. It delegates to
+  `simple-dispatch.sh`, which selects/dispatches reverse or forward; `simple-laptop-setup.sh` and
+  `simple-local-setup.sh` are the mode-specific local wizards. `suggest-via.sh` is a remote-only
+  helper for a best-effort bootstrap SSH default; `laptop-setup.sh` (reverse) /
+  `local-setup.sh` (forward) are the lower-level orchestrators; `mount-project.sh` and
+  `inject-rule.sh` are shared. Legacy/opt-in helpers (`preflight.sh`, `detect.sh`,
+  `connect-guesses.sh`, `server-guesses.sh`, `list-projects.sh`, `session-cache.sh`) are not part of
+  the default simple path.
 - `adapters/{codex,opencode}.md` — per-agent notes. `opencode.md` is installed as opencode's custom
   command; `codex.md` is reference-only (Codex has no custom slash commands, so manage.sh installs the
   shared `SKILL.md` as a native Codex **skill** under `$CODEX_HOME/skills/`, invoked as
   `$remote-harness`). Both just tell the agent to read `SKILL.md` and pass the right `--launch`.
 - `manage.sh` — install (copy) / `--dev` (symlink) / `--uninstall`. Installs the core to
-  `~/.remote-harness/{SKILL.md,scripts/,reference/}` plus the three per-agent entry files.
+  `~/.remote-harness/{SKILL.md,SKILL.cn.md,scripts/,reference/,docs/}` plus the per-agent entry files;
+  native skill directories also include `docs/` so `SKILL.md` links work after copy install.
 
-## Two directions (the core model)
+## Current product shape
 
-Generic roles: **A** = machine the agent runs on; **P** = machine the code lives on (an ssh `<alias>`).
-- **reverse**: A = remote box, P = laptop behind NAT → reverse SSH tunnel; orchestrated by
-  `laptop-setup.sh` running on the laptop.
-- **forward**: A = local machine, P = directly-ssh-reachable server → direct ssh; orchestrated by
-  `local-setup.sh` running locally.
-Both: sshfs-mount P's project onto an empty dir on A, inject "build on `<alias>`" via `inject-rule.sh`,
-launch the agent in the mount.
+The default product is **simple reverse**: **A** = remote box where the coding agent runs, **P** =
+the user's laptop behind NAT where the code lives. The agent returns one local bootstrap command; all
+concrete SSH/path choices happen in the user's local terminal. The supported counterpart is
+**simple forward**: **A** = local machine where Codex/agent runs, **P** = SSH server where the
+project and dev environment live. The old explicit reverse/forward runbooks have been removed from
+the default surface; keep `reference/` aligned with the simple flows.
+
+Generic roles still matter for internals: **A** = machine the agent runs on; **P** = machine the code
+lives on (an ssh `<alias>`). The lower-level reverse flow uses a reverse SSH tunnel; the forward flow
+uses direct ssh. Both mount P's project onto an empty dir on A, inject "build on `<alias>`" via
+`inject-rule.sh`, and launch the agent in the mount.
+
+## Simple Reverse Rules
+
+- The agent must not ask for local laptop details, local paths, remote mount paths, reverse ports, or
+  namespaces in chat. It only returns the bootstrap command and a short explanation.
+- The public simple command must target `simple-bootstrap.sh`, not a mode-specific helper. Pass
+  `--mode reverse` for known reverse, `--mode forward` for known forward, and omit `--mode` when
+  ambiguous.
+- The command always runs locally, but the script may live remotely. Do not assume
+  `~/.remote-harness/scripts` exists on the user's laptop. If the skill/source directory is remote,
+  emit a fetch form that reads remote `scripts/simple-bootstrap.sh` over SSH and pipes it to local
+  `bash -s -- <mode args>`.
+- The bootstrap command must be compact but copyable: use a small number of short lines, never a
+  single long line. Keep any remote `ssh ... | bash ...` pipeline on readable continuation lines so
+  chat wrapping cannot split a logical shell line.
+- The local bootstrap command may read the local `LAST_VIA` cache to prefill the first prompt. If the
+  cache is empty, the command may fall back to a best-effort remote SSH target suggested by
+  `scripts/suggest-via.sh`.
+- The remote SSH target suggestion may use server-side facts only: remote `id -un`, server address,
+  and server SSH port. If using `SSH_CONNECTION`, use only fields 3 and 4 (`server-ip` /
+  `server-port`); fields 1 and 2 are local/client data and must never be printed, cached, or placed
+  into the command.
+- Treat the suggested SSH target as an editable prompt default only. The user's local cache wins over
+  the remote suggestion, and the user must be able to press Enter to accept or type a different Host
+  alias / SSH args for ProxyJump, NAT, VPN, IPv6, or nonstandard routing.
+- If the invocation explicitly requests YOLO/bypass/no-approval mode, the generated command must pass
+  `--yolo` and the local wizard must not ask for YOLO confirmation again. Only ask the YOLO question
+  when the invocation did not already make that choice.
+- Cached project and mountpoint values are defaults, not silent choices. If a cached local project
+  path exists, show it as the default and let the user press Enter or replace it.
+- The simple flow uses the fixed session alias `rlocal`. Do not reintroduce `<user>-mac` /
+  `rlocal-mac` naming in the default simple path.
+- `rlocal` is written only to a remote session-local ssh config under
+  `$RH_HOME/.sessions/.../ssh_config`. The simple path must not write the remote box's
+  `~/.ssh/config`.
+- The laptop-side RemoteForward alias is also session-local under local
+  `~/.remote-harness/.sessions/.../ssh_config`. `laptop-setup.sh` must not write local
+  `~/.ssh/config`, `~/.ssh/known_hosts`, SSH keys, backup files, or control sockets, and must not
+  clean up or rewrite historical user ssh config blocks automatically.
+- Simple reverse may temporarily manage exactly one local `~/.ssh/authorized_keys` entry for the
+  box-generated remote-harness key. The entry must be inside a tagged
+  `remote-harness:reverse-auth:<tag>` block, restricted to loopback with `from="127.0.0.1,::1"`,
+  reference-counted under `~/.remote-harness/.sessions/authorized-keys/...`, and removed on exit
+  when no active session still references it. If a matching active user key already exists, reuse it
+  and do not append anything.
+- Apart from that explicit reverse-auth exception, SSH authentication remains user-owned. The simple
+  flow may read existing user SSH config/keys/agent behavior, but it must not install keys or
+  silently create credentials.
+- The launched agent should see short commands such as `ssh rlocal 'cd ... && <command>'`. Hide the
+  temp ssh config behind the session-local `bin/ssh` wrapper that is prepended to the launched
+  agent's `PATH`; do not expose `ssh -F <temp-config> ...` in the injected rule.
+- The default remote mountpoint is under remote `~/.remote-harness/mounts/<project>` and should be
+  removed on exit when empty. User-entered mountpoints are allowed because they are explicit choices.
+- When `RH_LANG=zh`, local script prompts should be Chinese. The skill command itself selects
+  `RH_LANG`; the local scripts own the rest of the interaction.
+
+## Simple Forward Rules
+
+- Use simple forward when the user asks for local Codex/agent with a project, toolchain, or dev
+  environment on an SSH server. Short phrasing such as "本地开发远程项目" or "本地开发服务器项目" must
+  trigger forward.
+- The skill output should still go through `scripts/simple-bootstrap.sh` with `--mode forward`,
+  `RH_LANG=<lang>`, `--launch <agent>`, and optional `--yolo`. If the script source is remote, use
+  the fetch form; the source SSH target is only for loading remote-harness scripts, while the
+  forward wizard separately asks for the project server target.
+- The local wizard owns all concrete values: server SSH target, server project directory, local
+  mountpoint, and YOLO preference when it was not already explicit in the invocation.
+- Do not scan the server to discover project directories in the simple path. Cached values are only
+  prompt defaults.
+- The mounted directory is for local file reads, writes, edits, and searches. Project commands
+  (build, run, test, install, format, lint, language server, migrations, mutating git commands, and
+  other toolchain/runtime work) must run on the server through the injected `ssh <alias> 'cd ... &&
+  <cmd>'` rule.
+- `local-setup.sh` must use a session-local SSH config for every server target, including an existing
+  Host alias. When the user supplied raw SSH args it may create `<host>-dev`; when the user supplied
+  a Host alias it can use that short name through the session config. In all cases SSH runtime files
+  (`known_hosts`, ControlPath) stay under local `~/.remote-harness/.sessions/...`.
+- The default local mountpoint is under local `~/.remote-harness/mounts/<project>` and should be
+  removed on exit when empty. User-entered mountpoints are allowed because they are explicit choices.
+
+## Ambiguous Simple Mode
+
+- If the user request does not clearly imply reverse or forward, emit the `simple-bootstrap.sh`
+  command without `--mode` instead of asking in chat.
+- `simple-dispatch.sh` prompts locally for reverse/forward, defaults to reverse on first run, caches
+  `LAST_MODE`, and then hands off to the selected mode's local wizard.
+- Because every emitted command is run locally, prefer local terminal prompts and local caches for
+  mode, server, project, mountpoint, and YOLO choices. Keep the chat command short; put branching in
+  `simple-bootstrap.sh` / `simple-dispatch.sh`.
 
 ## Invariants — do NOT break these
 
@@ -39,8 +140,10 @@ launch the agent in the mount.
    has no install) and run there. It sources `_common.sh` via `. "$(dirname "$0")/_common.sh"`, so the
    emitted one-command fetches BOTH files into one temp dir. Don't add dependencies that only exist
    in the install dir.
-2. **Always confirm, never auto-infer.** Direction, the code location, and the mountpoint must each be
-   an explicit user choice (detection only pre-fills). See SKILL.md "Confirm, don't infer".
+2. **Always confirm, never silently choose.** In the default simple path, the SSH target, project
+   dir, mountpoint, and YOLO preference are explicit choices; cached or generated values only prefill
+   prompts. A YOLO request in the invocation is already explicit, so do not ask it again.
+   Direction and locations must always be explicit user choices. Detection only pre-fills.
 3. **`inject-rule.sh` is direction-neutral and never writes the mounted repo.** Per-session artifacts
    live under `$RH_HOME/.sessions/<key>`. Rule wording uses `<alias>` / "this machine".
 4. **Shell-quote every value spliced into a remote command** with `sq()` (from `_common.sh`) — paths
@@ -50,6 +153,14 @@ launch the agent in the mount.
    OS-aware; **macOS uses FUSE-T (no kernel extension), never macFUSE**. `set -uo pipefail` (not `-e`)
    on probes that must keep emitting.
 6. **Scripts emit `KEY=VALUE` on stdout, human notes on stderr.** Keep that contract; consumers parse it.
+7. **No simple path writes SSH runtime state under `~/.ssh`, except reverse authorized_keys.**
+   Reverse and forward setup must use session-local ssh config files, `known_hosts`, ControlPath
+   sockets, and other SSH runtime files under `~/.remote-harness/.sessions/...`. Do not create,
+   edit, back up, append to, or clean up local or remote `~/.ssh/config`, `known_hosts`, SSH keys,
+   `config.rh-bak.*`, or `known_hosts_<alias>`. The only allowed `~/.ssh` mutation is the simple
+   reverse tagged `authorized_keys` block described above; it must be idempotent, scoped, and
+   cleaned up with reference counting. Reading user-managed SSH config/keys for an explicit Host
+   alias is allowed; other mutation is not.
 
 ## Conventions
 
@@ -59,14 +170,17 @@ launch the agent in the mount.
   its `*.cn.md` in the same change so they stay in sync. Examples: `SKILL.md`→`SKILL.cn.md`,
   `reference/reverse.md`→`reference/reverse.cn.md`, `adapters/codex.md`→`adapters/codex.cn.md`.
 - Keep `SKILL.md` lean; put depth in `reference/`.
+- Keep maintainer-facing design principles here in `AGENTS*.md`; mirror user-facing consequences in
+  `SKILL*`/`docs*`/`reference*` only when useful.
 - One responsibility per script; share via `_common.sh`.
 
 ## Developing & testing
 
 - `bash -n scripts/*.sh manage.sh` after every change (syntax gate).
-- Dry-run pieces in a sandbox `HOME`/`RH_HOME` (e.g. `inject-rule.sh on … ; off …`; `preflight.sh
-  --direction forward`; `mount-project.sh --unmount`). Verify reverse's managed-alias output is
-  unchanged when touching `_common.sh`.
+- Dry-run pieces in a sandbox `HOME`/`RH_HOME` (e.g. `inject-rule.sh on … ; off …`;
+  `mount-project.sh --unmount`; legacy `preflight.sh --direction forward` only when touching that
+  compatibility helper). Verify reverse's managed-alias output is unchanged when touching
+  `_common.sh`.
 - Forward loopback E2E: add an ssh alias to `localhost`, run `local-setup.sh --via … --remote-path …
   --mountpoint /tmp/… --launch claude`; confirm mount + rule + unmount-on-exit.
 - The full two-host E2E (reverse from a box / forward to a server, incl. macOS FUSE-T) is a manual test.

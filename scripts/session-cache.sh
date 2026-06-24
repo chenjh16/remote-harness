@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# remote-harness / session-cache.sh — remember a namespace's last connection choices on THIS machine
-# so a RE-RUN can recommend them instantly, with ZERO remote discovery (no project scan, no ssh-find).
-# Realizes the "keep historical connection info" idea: per-namespace KEY=VALUE file under
-# $RH_HOME/.sessions-cache/<key>.env (mode 600). Direction-neutral — reverse keys by the real-user
-# namespace RU, forward keys by the server token.
+# remote-harness / session-cache.sh — legacy generic cache helper.
+# Current simple flows use dedicated local cache files (`simple-cache.env`, `simple-forward-cache.env`,
+# `simple-mode-cache.env`) so terminal prompts can show defaults without involving the agent. Keep
+# this older per-key KEY=VALUE cache for compatibility or explicit tooling.
 #
 #   session-cache.sh put <key> KEY=VALUE [KEY=VALUE ...]   # store (atomic; ignores malformed pairs)
 #   session-cache.sh get <key>                             # print stored KEY=VALUE lines (none if absent)
 #
-# The agent calls `get` during its single local probe (to pre-fill the questions) and `put` right
-# before emitting the final command. Read-only `get` never fails the flow.
+# Read-only `get` never fails the flow.
 set -uo pipefail
 
 RH="${RH_HOME:-$HOME/.remote-harness}"

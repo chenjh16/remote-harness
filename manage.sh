@@ -9,7 +9,7 @@
 #
 #   agents: claude codex opencode   (default: all)
 #
-# Uninstall never touches your ~/.ssh tunnel config or any sshfs mounts.
+# Uninstall never touches SSH config/authorization files or any sshfs mounts.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -71,6 +71,14 @@ place_scripts() {  # destdir
     mkdir -p "$1"; cp "$SRC"/scripts/*.sh "$1"/; chmod +x "$1"/*.sh
   fi
 }
+place_docs() {  # destdir
+  guard_remove_target "$1"; rm -rf "$1"
+  if [ "$MODE" = dev ]; then
+    mkdir -p "$(dirname "$1")"; ln -s "$SRC/docs" "$1"
+  else
+    mkdir -p "$1"; cp "$SRC"/docs/* "$1"/
+  fi
+}
 rm_path() {  # remove a file/dir/symlink if present (symlinks unlinked, never followed)
   guard_remove_target "$1"
   if [ -e "$1" ] || [ -L "$1" ]; then rm -rf "$1"; echo "  ✓ removed $1"; fi
@@ -83,7 +91,7 @@ if [ "$ACTION" = uninstall ]; then
   want opencode && rm_path "$OPENCODE_FILE" || true
   # Drop the shared core only when removing everything (other launchers still reference it).
   if want claude && want codex && want opencode; then rm_path "$RH_HOME"; fi
-  echo "done. (Your ~/.ssh tunnel alias and any sshfs mounts were left untouched.)"
+  echo "done. (SSH config/authorization files and any sshfs mounts were left untouched.)"
   exit 0
 fi
 
@@ -94,6 +102,7 @@ mkdir -p "$RH_HOME"
 place_file "$SRC/SKILL.md" "$RH_HOME/SKILL.md"
 place_file "$SRC/SKILL.cn.md" "$RH_HOME/SKILL.cn.md"
 place_scripts "$RH_HOME/scripts"
+place_docs "$RH_HOME/docs"
 # reference docs, read on demand at runtime via $RH/reference/*.md (incl. *.cn.md)
 guard_remove_target "$RH_HOME/reference"; rm -rf "$RH_HOME/reference"
 if [ "$MODE" = dev ]; then ln -s "$SRC/reference" "$RH_HOME/reference"
@@ -103,6 +112,8 @@ echo "  ✓ core ($MODE) → $RH_HOME"
 if want claude; then
   guard_remove_target "$CLAUDE_DIR"; rm -rf "$CLAUDE_DIR"; mkdir -p "$CLAUDE_DIR"
   place_file "$SRC/SKILL.md" "$CLAUDE_DIR/SKILL.md"
+  place_file "$SRC/SKILL.cn.md" "$CLAUDE_DIR/SKILL.cn.md"
+  place_docs "$CLAUDE_DIR/docs"
   echo "  ✓ Claude Code skill ($MODE) → $CLAUDE_DIR/SKILL.md"
 fi
 if want codex; then
@@ -117,6 +128,8 @@ if want codex; then
   else
     mkdir -p "$CODEX_DIR"
     cp "$SRC/SKILL.md" "$CODEX_DIR/SKILL.md"
+    cp "$SRC/SKILL.cn.md" "$CODEX_DIR/SKILL.cn.md"
+    mkdir -p "$CODEX_DIR/docs"; cp "$SRC"/docs/* "$CODEX_DIR/docs"/
     echo "  ✓ Codex skill (copy)       → $CODEX_DIR/SKILL.md  (invoke: '\$remote-harness')"
   fi
 fi

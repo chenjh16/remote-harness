@@ -1,117 +1,225 @@
 ---
 name: remote-harness
 description: >-
-  Set up a development harness that connects a coding agent and a codebase living on different
-  machines, in EITHER direction. Invoke when the user runs /remote-harness (Claude Code/opencode)
-  or $remote-harness (Codex skill invocation). Reverse: the agent runs
-  on a remote box and your code is on your LAPTOP (behind NAT) — builds a reverse SSH tunnel.
-  Forward: the agent runs LOCALLY and your code is on a directly ssh-reachable REMOTE server. Either
-  way it sshfs-mounts the code onto an empty dir where the agent runs, tells the agent to run
-  builds/tests on the machine that hosts the code, and hands you ONE copy-paste command that does
-  the rest (mount + launch claude/codex/opencode). Supports Linux/WSL/macOS.
+  Connect a coding-agent session to a project on another machine without collecting concrete paths
+  or credentials in chat. Supports simple reverse (agent on a remote box, project on the user's
+  laptop) and simple forward (agent/Codex local, project and dev environment on an SSH server).
+  Return one local bootstrap command that prompts in the user's terminal, mounts the project with
+  sshfs, injects a run-on-the-project-host rule, and launches claude/codex/opencode in the mount.
 ---
 
 # Remote Harness
 
-This file is the lean entry point. Per **progressive disclosure**, it covers the always-needed bits
-(what the skill does, the interaction rules, and picking the direction); the detailed per-direction
-flow and the helper-script contracts live under `$RH/reference/` — read only the one you need.
+Default mode is **simple reverse**. Use **simple forward** when the user explicitly asks for local
+Codex/agent with a project or development environment on a remote server.
 
-## What this skill does
+Infer the mode from short user wording:
 
-The coding agent and the codebase are on **two different machines**. This skill mounts the code
-where the agent runs and launches the agent there, in whichever of two directions applies:
+- Simple forward: phrases such as "本地开发远程项目", "本地开发服务器项目", "local dev remote
+  project", "local Codex with server project", or "project/dev environment on server".
+- Simple reverse: phrases such as "远程开发本地", "远程开发本地项目", "远端开发本地", "remote dev
+  local project", or "remote agent with laptop project".
+- Ambiguous: when the wording does not clearly determine forward or reverse, return the
+  unified command without `--mode`. The mode prompt defaults to reverse and is
+  cached locally like the other simple choices.
 
-- **Reverse** — the agent runs on a **remote box**; the code is on the user's **laptop** (behind
-  NAT). The box can't dial the laptop, so the laptop opens a **reverse SSH tunnel** and the laptop
-  project is sshfs-mounted onto the box.
-- **Forward** — the agent runs **locally** (laptop/WSL/mac); the code is on a **directly
-  ssh-reachable remote server**. No tunnel: the server's project is sshfs-mounted onto a local dir.
+## Modes
 
-In BOTH directions the invariant is the same: sshfs-mount the code onto an **empty** dir where the
-agent runs, inject a rule that builds/tests run **on the machine that hosts the code** (via
-`ssh <alias>`), and launch the agent (claude/codex/opencode) in the mount. Generically: **A** = the
-machine the agent runs on; **P** = the machine the code lives on (referenced by an ssh `<alias>`).
+Simple reverse:
 
-## Interaction — keep the flow continuous
+- The coding agent runs on a remote box.
+- The codebase is on the user's laptop.
+- The agent must not ask for local laptop details, local paths, remote mount paths, reverse ports, or
+  namespaces.
+- The agent may suggest a default remote SSH target using server-side facts only.
+- The agent's whole job is to return one command plus a short explanation.
+- The command prompts for all concrete values in the user's local terminal, not in chat.
+- Protect local/client information. When deriving a default from `SSH_CONNECTION`, use only fields 3
+  and 4 (`server-ip` / `server-port`). Never expose fields 1 and 2 (`client-ip` / `client-port`).
+- The SSH prompt default is local cache first, then the server-side suggestion. It remains editable.
 
-This skill is **one continuous agent-driven flow** from picking the direction to handing over the
-final command. Whenever a step needs a user decision or is blocked, use the best interactive input
-channel your agent runtime exposes — never skip a required confirmation, and never continue past an
-unanswered decision.
+Simple forward:
 
-> **Confirm, don't infer (REQUIRED).** Detected values — direction, the project/codebase to develop,
-> the mountpoint where the agent will launch, and (reverse, where a box account may be shared) the
-> per-real-user **namespace `RU`** that names your reverse tunnel — are only DEFAULTS that PRE-FILL a
-> question, never final decisions. You MUST get the user's explicit answer for EACH before emitting
-> the final command. Auto-detection (e.g. `SSH_CONNECTION` → direction, cwd → mountpoint,
-> `REALUSER_GUESS` → namespace) only pre-selects the likely option; it must NOT skip the question.
-> Never silently assume the user's intent.
+- The coding agent runs locally.
+- The project and dev environment live on a directly SSH-reachable server.
+- The command prompts locally for the server SSH target, server project directory, optional local
+  mountpoint, and launch preference.
+- Files are read, written, edited, and searched in the local sshfs mount.
+- Builds, runs, tests, installs, formatters, linters, language servers, mutating git commands, and
+  other project tools must run on the server through `ssh <server-alias> 'cd <project> && <cmd>'`.
 
-> **Speed — ask, don't fish (REQUIRED).** Keep the whole flow to a few questions. Probe **locally,
-> once** (batch the helper scripts into one Bash call; never re-run a script just to read its stderr),
-> then batch the user decisions into as few AskUserQuestion rounds as possible. **Never discover the
-> user's project by remote search** — no `list-projects.sh --via`, no `ssh <alias> 'find …'`/`ls`. It
-> is slow and routinely misleads (the project may live under a *different* remote account than
-> detection guesses). Recommend only from cheap, local/cached signals — `session-cache.sh`,
-> `~/.ssh/config`, the cwd, the connect/server guesses — and always offer a typed "Other". A typed
-> path is validated by the setup script, which re-prompts if it's wrong.
+The old Agent-guided reverse flow has been removed from the default product surface. Use the unified
+simple bootstrap flow for reverse, forward, and ambiguous requests.
 
-> **Cross-agent question tool policy:** wherever the steps say "**AskUserQuestion**", use the
-> runtime's structured user-input tool when one is available. Claude Code: use `AskUserQuestion`.
-> Codex: if `request_user_input` is listed and available for the current collaboration mode, use it
-> for the decision; it waits for the user's answer and may add an `Other` free-form option. If Codex
-> says `request_user_input` is unavailable (commonly because the session is in Default mode without
-> the `default_mode_request_user_input` feature), fall back to one concise chat question and wait for
-> the reply. opencode: ask in chat and wait. For chat fallbacks, batch tightly related decisions
-> (up to three) only when doing so reduces round-trips and the expected answer format is obvious.
+## Runtime
 
-> **Codex structured-input limit:** Codex `request_user_input` supports only 2-3 explicit choices
-> per question, and the client supplies the free-form `Other` answer. When there are many SSH
-> guesses, project paths, or mountpoints, summarize the longer list in chat, then put only the best
-> 2-3 choices in the structured prompt. Always leave the `Other`/free-form path available for the
-> user's real SSH command, project directory, or mountpoint.
+Set the launch CLI to the current agent runtime:
 
-The **only legitimate places to stop** are:
-- `sshfs` blocked: give the install cmd, AskUserQuestion ("installed? ✅/⚠️"), re-run on ✅.
-- After handing over the final command: the setup script takes over (self-contained + interactive on
-  that machine). **The agent's job is done once it hands the user that command.**
+- Codex: `--launch codex`
+- Claude Code: `--launch claude`
+- opencode: `--launch opencode`
 
-## Invocation options
+If the invocation asks for "yolo", "bypass approvals", "skip permissions", "危险模式", "免审批", or
+"开启yolo模式", append `--yolo` to the final local command arguments. Otherwise do not add it.
+When `--yolo` is added because the user asked for it, the local wizard treats that as the final
+choice and must not ask the user to confirm YOLO/bypass mode again.
+If the user asks in Chinese or requests Chinese, set `<lang>` to `zh`; otherwise set it to `en`.
 
-The user may pass a free-form request when invoking (e.g. `/remote-harness 开启yolo模式`,
-`/remote-harness yolo`, `$remote-harness yolo模式，中文`, "...bypass approvals"). Parse for intent
-and apply when emitting the command:
-
-- **YOLO / bypass approvals** (any of: "yolo", "bypass approvals", "skip permissions", "危险模式",
-  "免审批", "开启yolo模式") → add `--yolo` to the emitted command (the setup script maps it per agent).
-  Confirm once if intent is ambiguous; otherwise just apply it. If absent, launch normally.
-
-## References (read on demand)
+For simple reverse only, before answering, if possible run:
 
 ```bash
-RH="${RH_HOME:-$HOME/.remote-harness}"
-[ -d "$RH/scripts" ] || echo "scripts missing — run: manage.sh"
+bash "${RH_HOME:-$HOME/.remote-harness}/scripts/suggest-via.sh"
 ```
 
-- Helper-script contracts (KEY=VALUE outputs, `inject-rule.sh`, etc.): **`$RH/reference/scripts.md`**
-- **Reverse** flow (preflight → build tunnel → emit the laptop command): **`$RH/reference/reverse.md`**
-- **Forward** flow (preflight → pick server/dir → emit the local command): **`$RH/reference/forward.md`**
+Use its `VIA=` value as `<default_via>` only when `STATUS=ok`; otherwise omit the
+`RH_DEFAULT_VIA=...` prefix. This value is only a prompt default. Do not include the helper output in
+the response.
 
-Parse `KEY=VALUE` from each script's stdout; human notes go to stderr.
+## What To Tell The User
 
----
+### Unified Command
 
-## Step −1 — Pick the direction (ALWAYS ASK — never decide silently)
+Return the same script entry point for reverse, forward, and ambiguous requests:
+`scripts/simple-bootstrap.sh`. The command always runs locally, but the script itself may be local or
+may need to be fetched from the remote machine where this skill is installed. Use a fenced `bash`
+code block and do not put it in a bullet/numbered list. Optimize for copyability: keep the command
+to a small number of short lines, and never make one long shell line that chat wrapping can split.
+`simple-bootstrap.sh` delegates to `simple-dispatch.sh`; users do not call the dispatcher directly.
 
-**You MUST ask the user which direction, even when you can guess.** Use the cross-agent question tool
-policy above — "Where does your code live, relative to where I'm running?":
-- **Reverse** — "I'm on a remote box; my code is on my laptop (behind NAT)."
-- **Forward** — "I'm running locally; my code is on a remote server I can ssh to."
+Use `--mode reverse` when the request clearly means remote agent + local laptop project. Use
+`--mode forward` when the request clearly means local agent + server project. Omit `--mode` when the
+request is ambiguous; the dispatcher prompts locally, defaults to reverse on first run, and caches
+the mode choice.
 
-Use detection ONLY to pre-select the likely option (do NOT skip the question): `SSH_CONNECTION` set
-(or `detect.sh` → `ON_REMOTE=1`) ⇒ pre-select **reverse**; unset ⇒ pre-select **forward**. Wait for
-the user's explicit answer.
+If the user is already running the command on a machine that has remote-harness installed locally,
+use the local form:
 
-Then **read `$RH/reference/reverse.md` or `$RH/reference/forward.md`** for the chosen direction and
-follow it step by step, honoring the "Confirm, don't infer" rule for every choice.
+```bash
+RH_LANG=<lang> bash "${RH_HOME:-$HOME/.remote-harness}/scripts/simple-bootstrap.sh" \
+  <mode-arg> --launch <launch>
+```
+
+If the skill/source directory is on a remote machine, or if local installation is uncertain, use the
+fetch form. Replace `<source_prompt>` with `remote-harness source SSH target/args` or
+`remote-harness 来源 SSH 目标/参数`, replace `<default_via>` with the server-side suggestion or an
+empty string, and use the same `<mode-arg>` rules:
+
+```bash
+(
+set -f
+p='<source_prompt>'
+d='<default_via>'
+printf '%s' "$p${d:+ [$d]}: " >/dev/tty
+IFS= read -r h </dev/tty || exit 2
+h=${h:-$d}; h=${h#ssh }; [ -n "$h" ] || exit 2
+mkdir -p "$HOME/.remote-harness/.sessions"
+s=$(mktemp -d "$HOME/.remote-harness/.sessions/fetch.XXXXXX") || exit 1
+trap 'rm -rf "$s"' EXIT
+ssh -n -o ClearAllForwardings=yes \
+  -o UserKnownHostsFile="$s/known_hosts" \
+  -o GlobalKnownHostsFile=/dev/null \
+  -o StrictHostKeyChecking=accept-new \
+  -o ControlMaster=no -o ControlPath=none \
+  $h \
+  'cat "${RH_HOME:-$HOME/.remote-harness}/scripts/simple-bootstrap.sh"' |
+  RH_VIA="$h" RH_LANG=<lang> bash -s -- <mode-arg> --launch <launch>
+)
+```
+
+`<mode-arg>` is:
+
+- `--mode reverse` for clear simple reverse;
+- `--mode forward` for clear simple forward;
+- omitted for ambiguous mode.
+
+Append `--yolo` only when the invocation explicitly requested YOLO/bypass/no-approval mode. In the
+fetch form, the source SSH target is only the remote-harness script source. Reverse mode reuses it as
+the remote box target; forward mode still asks locally for the project server target.
+
+The user should paste and run the command in a fresh local terminal.
+
+### Simple Reverse
+
+After the command starts, the terminal will ask for:
+
+- the remote SSH target/args or Host alias, with the last local value as the default, otherwise the
+  server-side suggestion;
+- the local project directory;
+- an optional remote mountpoint, blank for remote `~/.remote-harness/mounts/<project>`;
+- whether to launch with YOLO/bypass mode, defaulting to yes unless the local cache says no. This
+  question is skipped when the invocation already requested YOLO and the command includes `--yolo`.
+
+The script uses a fixed per-session laptop alias (`rlocal`) by default. In the simple flow that
+alias is written to a temporary ssh config on the remote box, under
+`~/.remote-harness/.sessions/.../ssh_config`, and cleanup removes it at the end. It does not create
+or modify any file under the remote box's `~/.ssh`. The laptop-side RemoteForward alias is also
+session-local under local
+`~/.remote-harness/.sessions/.../ssh_config`; it is hidden behind the setup script's ssh wrapper and
+removed on exit. Temporary SSH configs, `known_hosts`, and ControlPath sockets live under
+`~/.remote-harness/.sessions/...`; they are not written under the laptop's `~/.ssh`.
+
+For reverse authentication, the remote box generates or reuses a remote-harness key under its own
+`~/.remote-harness/keys`. The local setup may add that public key to the laptop's
+`~/.ssh/authorized_keys` in a tagged `remote-harness:reverse-auth:<tag>` block restricted to
+loopback (`from="127.0.0.1,::1"`). It first checks for an existing active matching key and does not
+append a duplicate. Managed entries are reference-counted under
+`~/.remote-harness/.sessions/authorized-keys/...` and removed on exit when no active session still
+uses them.
+
+The launched agent gets a session-local `ssh` wrapper in `PATH`, so the injected rule can simply say
+`ssh rlocal ...`.
+
+The script remembers the last confirmed values in local `~/.remote-harness/simple-cache.env` and
+uses them as defaults next time. The cache is local-only; deleting that file resets the defaults.
+
+No directory recommendation is part of the simple flow.
+
+### Simple Forward
+
+In forward mode, the terminal will ask for:
+
+- the server SSH target/args or Host alias, with the last local value as the default;
+- the server project directory, with the last local value as the default;
+- an optional local mountpoint, blank for local `~/.remote-harness/mounts/<project>`;
+- whether to launch with YOLO/bypass mode, defaulting to yes unless the local cache says no. This
+  question is skipped when the invocation already requested YOLO and the command includes `--yolo`.
+
+The launched agent works in the local mount. Its injected rule allows local file reads/writes/edits
+and searches, but requires project commands to run on the server over SSH. Exiting the launched agent
+unmounts the project and removes the session rule.
+
+The forward setup always uses a session-local ssh config under local
+`~/.remote-harness/.sessions/.../ssh_config`. When the user enters raw SSH args instead of a Host
+alias, it creates a session-local `<host>-dev` alias there. It does not create or modify any file
+under local `~/.ssh`; temporary `known_hosts` and ControlPath sockets also stay under
+`~/.remote-harness/.sessions/...`. The temp config is hidden from the launched agent with the same
+session `ssh` wrapper pattern.
+
+## Preconditions
+
+- Script source: remote-harness is installed either locally at `~/.remote-harness` or on the SSH
+  source machine used by the fetch command.
+- Simple reverse: remote-harness is installed on the remote box at `~/.remote-harness`, or remote
+  `RH_HOME` points to the install.
+- Simple reverse: the laptop can SSH into the remote box using the user's already-configured key.
+- Simple reverse: the remote box can authenticate back to the laptop through the reverse tunnel.
+  The local setup can temporarily authorize the remote-harness public key in
+  `~/.ssh/authorized_keys` as a tagged, loopback-scoped block, then remove it on exit. Existing
+  active matching user keys are reused untouched.
+- Simple reverse: the remote box has `sshfs` and the chosen agent CLI installed.
+- Simple reverse: the laptop can run an SSH server; `laptop-setup.sh` will detect and guide enabling
+  it when needed.
+- Simple forward: the local machine can SSH into the server and has `sshfs`; the script guides
+  installing sshfs when needed.
+
+## More Detail
+
+The feasibility analysis and implementation plan live in:
+
+- `docs/complete-flow.md`
+- `docs/complete-flow.cn.md`
+- `docs/complete-flow.html`
+- `docs/simple-flow.md`
+- `docs/simple-flow.cn.md`
+- `docs/simple-forward-flow.md`
+- `docs/simple-forward-flow.cn.md`

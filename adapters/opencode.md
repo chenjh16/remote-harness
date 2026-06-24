@@ -1,17 +1,21 @@
 ---
-description: Connect this agent to a codebase on another machine (remote box↔laptop, or local↔remote server) and vibe-code
+description: Connect this agent to a project on another machine via remote-harness simple workflows
 ---
 
-Run the **remote-harness** workflow.
+Run the **remote-harness** simple workflow.
 
-Read `~/.remote-harness/SKILL.md` and follow it step by step (start at "Step −1 — pick the
-direction"); the helper scripts are in `~/.remote-harness/scripts/` and emit `KEY=VALUE` on stdout.
-Goal: connect this agent and my codebase (on different machines) and drop me into the project, with
-builds/tests on whichever machine hosts the code. The skill always asks which direction
-first (pre-selecting a likely default, but never deciding for me): **reverse** = you're on a remote box, code on my laptop behind NAT (reverse tunnel);
-**forward** = you're local, code on a remote server I ssh to (direct mount).
+Read `~/.remote-harness/SKILL.md` and return the bootstrap command immediately. Do not ask for SSH
+targets, paths, ports, or namespaces in chat; the command prompts for them in the user's local
+terminal. Use simple reverse by default; use simple forward when the user explicitly asks for a local
+agent with a project/dev environment on an SSH server.
+The setup scripts use session-local SSH config files and wrappers under `~/.remote-harness`.
+Mention `~/.ssh` edits only for the reverse-mode `authorized_keys` temporary managed block; do not
+imply that config, known_hosts, or SSH keys are edited.
 
-Ask me for any required input and wait for my reply before proceeding.
+Because this adapter is for opencode, the emitted command must use:
 
-**You are running in opencode** — so when you emit the final command, pass `--launch opencode` so it
-starts opencode (not Claude Code). The machine the agent runs on must have the `opencode` CLI installed.
+```bash
+--launch opencode
+```
+
+If the user asks for yolo / bypass approvals, append `--yolo`.

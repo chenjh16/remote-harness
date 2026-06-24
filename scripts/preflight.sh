@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # remote-harness / preflight.sh
-# ONE-SHOT prerequisite check for the mount flow — replaces running detect.sh + check-tunnel.sh
-# + the empty-dir check as separate agent round-trips. Runs every check in a single process and
-# STOPS at the first blocker with a detailed ERROR + REMEDY.
+# Legacy/diagnostic prerequisite check for pre-simple flows. The current simple reverse/forward
+# entry points do not call this script; they create session-local SSH config files and run their own
+# targeted checks. Keep this helper for compatibility and focused debugging only.
 #
 #   preflight.sh [--alias <preferred>] [--project-dir <dir>]          # reverse (default)
 #   preflight.sh --direction forward [--server '<ssh-args|alias>']    # forward
 #
-# reverse: gate = a working reverse tunnel + local sshfs/FUSE. forward: gate = local sshfs/FUSE
+# reverse: legacy gate = a working reverse tunnel discoverable through an explicit alias or
+# historical ~/.ssh/config loopback alias + local sshfs/FUSE. forward: gate = local sshfs/FUSE
 # (+ server reachability if --server given). Both emit DIRECTION and PROJECT_DIR_EMPTY.
 # It does NOT scan for the user's project — the flow asks the user to TYPE the path (see SKILL.md
-# "ask, don't fish"); the legacy `--no-list` flag is still accepted but is now a no-op.
+# "ask, don't fish"); the compatibility `--no-list` flag is still accepted but is now a no-op.
 #
 # Output: KEY=VALUE on stdout. PREFLIGHT=ok|blocked. When blocked: BLOCKED_STEP + ERROR + REMEDY.
 set -uo pipefail
@@ -58,7 +59,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --alias)       need_arg "$1" "${2-}"; PREF_ALIAS="$2"; shift 2;;
     --project-dir) need_arg "$1" "${2-}"; PROJECT_DIR="$2"; shift 2;;
-    --no-list)     shift;;                                            # legacy no-op: preflight never scans for projects
+    --no-list)     shift;;                                            # compatibility no-op: preflight never scans for projects
     --direction)   need_arg "$1" "${2-}"; DIRECTION="$2"; shift 2;;   # reverse (default) | forward
     --server)      need_arg "$1" "${2-}"; SERVER="$2"; shift 2;;      # forward: ssh args/alias to the project server
     *) shift;;
@@ -77,15 +78,21 @@ if [ "$DIRECTION" = forward ]; then
   emit DIRECTION forward
   check_sshfs_fuse                                  # checks THIS (local) machine
   if [ -n "$SERVER" ]; then
+    mkdir -p "$RH/.sessions" 2>/dev/null || true
     # $SERVER unquoted so raw args ("-p 2222 user@host") word-split; a bare alias is one word.
-    if ssh -o BatchMode=yes -o ConnectTimeout=8 $SERVER true 2>/dev/null; then
+    if ssh -o "UserKnownHostsFile=$RH/.sessions/preflight-known_hosts" \
+           -o GlobalKnownHostsFile=/dev/null \
+           -o StrictHostKeyChecking=accept-new \
+           -o ControlMaster=no -o ControlPath=none \
+           -o BatchMode=yes -o ConnectTimeout=8 $SERVER true 2>/dev/null; then
       emit SERVER_REACHABLE 1
     else
       emit SERVER_REACHABLE 0
       emit SERVER_NOTE "couldn't key-auth to the server non-interactively (sshfs/builds may prompt for a password — set up an ssh key)"
     fi
   fi
-  # Does the local invoking cwd work as the mountpoint, or fall back to ~/remote-harness-mounts/<name>?
+  # Does the local invoking cwd work as the mountpoint? The simple flow's default mountpoint is
+  # ~/.remote-harness/mounts/<project>.
   if [ -n "$(ls -A "$PROJECT_DIR" 2>/dev/null)" ]; then emit PROJECT_DIR_EMPTY 0
   else emit PROJECT_DIR_EMPTY 1; fi
   emit PREFLIGHT ok
@@ -107,8 +114,8 @@ elif [ -f "$HOME/.ssh/config" ]; then
 fi
 aliases=$(printf '%s' "$aliases" | xargs 2>/dev/null || printf '%s' "$aliases")
 [ -n "$aliases" ] || blocked tunnel \
-  "No reverse-tunnel ssh alias found (no 'Host ... HostName 127.0.0.1' in ~/.ssh/config)." \
-  "Set up the tunnel first (Step 1: setup-tunnel.sh + add the RemoteForward line on the laptop and reconnect), then re-run preflight."
+  "No legacy reverse-tunnel ssh alias found for this diagnostic check." \
+  "Use the simple bootstrap flow for normal sessions. For this legacy preflight only, pass --alias NAME for a session alias or run it in an environment that already has a loopback alias visible to ssh."
 
 OK_ALIAS="" OK_PORT="" LHOST="" LUSER="" last_err=""
 for a in $aliases; do
@@ -124,7 +131,7 @@ for a in $aliases; do
 done
 [ -n "$OK_ALIAS" ] || blocked tunnel \
   "Tunnel alias(es) [$aliases] exist but none reach the laptop (SSH=down). last error: ${last_err:-n/a}" \
-  "On the laptop ensure 'RemoteForward <port> 127.0.0.1:22' is set for the host you use, then RECONNECT (kill a stale master with 'ssh -O exit <host>'). Re-run preflight."
+  "Use the simple bootstrap flow to recreate the session-local tunnel, or pass a known-good legacy alias with --alias."
 emit TUNNEL_ALIAS "$OK_ALIAS"; emit TUNNEL_PORT "$OK_PORT"
 emit LAPTOP_HOSTNAME "$LHOST"; emit LAPTOP_USER "$LUSER"
 

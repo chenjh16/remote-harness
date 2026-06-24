@@ -4,6 +4,7 @@
 # FORWARD direction: the coding agent runs LOCALLY; the project lives on a directly ssh-reachable
 # REMOTE server. This sshfs-mounts the server's project onto an empty LOCAL dir, injects a
 # "run builds on the server" rule, and launches the agent locally in the mount. No reverse tunnel.
+# SSH args and aliases are wrapped in a session-local ssh config; ~/.ssh is never written.
 #
 # Usage (emitted by the skill — invokes the locally-installed copy):
 #   "$HOME/.remote-harness/scripts/local-setup.sh" --via '<ssh-args|alias>' \
@@ -13,7 +14,7 @@
 # Flags:
 #   --via <ssh-args|alias>  how you ssh to the server (e.g. "-p 2222 dev@host" or "myserver")
 #   --remote-path <dir>     absolute project dir ON THE SERVER to mount
-#   --mountpoint <dir>      local empty dir to mount onto (default: ~/remote-harness-mounts/<name>)
+#   --mountpoint <dir>      local empty dir to mount onto (default: ~/.remote-harness/mounts/<name>)
 #   --launch <cmd>          agent CLI to start locally (default: claude)
 #   --yolo                  bypass approvals on the launched agent
 #   --yes                   non-interactive (skip confirm prompts)
@@ -64,16 +65,22 @@ printf "\n${_B}remote-harness${_0} local setup ${_C}(forward)${_0}  platform=%s\
 
 # ---- auto-cleanup on exit (local unmount + rule removal) -------------------
 MOUNTED=0; CLEANED=0; RULE_INJECTED=0; LOCAL_MP=""; SALIAS=""
+LOCAL_SESSION_DIR=""; LOCAL_SSH_CONFIG=""
 cleanup() {
   [ "$CLEANED" = 1 ] && return 0; CLEANED=1
   if [ "$MOUNTED" = 1 ]; then
     printf '\n'; say "  Session ended — unmounting ${LOCAL_MP:-}..."
     "$SCRIPTS/mount-project.sh" --alias "${SALIAS:-}" --unmount --mountpoint "${LOCAL_MP:-}" >/dev/null 2>&1 \
       && ok "Unmounted" || warn "unmount failed — run: fusermount -u '${LOCAL_MP:-}' (or umount)"
+    case "${LOCAL_MP:-}" in "$HOME/.remote-harness/mounts/"*) rmdir "${LOCAL_MP:-}" 2>/dev/null || true;; esac
   fi
   if [ "${RULE_INJECTED:-0}" = 1 ]; then
     "$SCRIPTS/inject-rule.sh" off "$LAUNCH_BASE" "${LOCAL_MP:-}" >/dev/null 2>&1 \
       && ok "session rule removed" || true
+  fi
+  if [ -n "${LOCAL_SESSION_DIR:-}" ]; then
+    rm -rf "$LOCAL_SESSION_DIR" 2>/dev/null || true
+    ok "session ssh config removed"
   fi
 }
 
@@ -87,31 +94,36 @@ parse_via "$VIA"
 }
 [ -n "$V_HOST" ] || { printf 'could not parse --via into an ssh host/alias\n' >&2; exit 2; }
 safe_ssh_token "$V_HOST" || { printf 'unsafe ssh host in --via: %s\n' "$V_HOST" >&2; exit 2; }
-CFG="$HOME/.ssh/config"; mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh" 2>/dev/null || true
-touch "$CFG"; chmod 600 "$CFG" 2>/dev/null || true
-# Raw connection (explicit user/port/key/jump host) → persist a dedicated managed alias carrying
+# Always use a session-local ssh config so known_hosts/ControlPath stay under ~/.remote-harness.
+safe_alias_base="$(printf '%s' "$V_HOST" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._-]*//; s/[._-]*$//')"
+[ -n "$safe_alias_base" ] || safe_alias_base=server
+mkdir -p "$HOME/.remote-harness/.sessions" 2>/dev/null || true
+LOCAL_SESSION_DIR="$(mktemp -d "$HOME/.remote-harness/.sessions/forward-${safe_alias_base}.XXXXXX")" || exit 2
+LOCAL_SSH_CONFIG="$LOCAL_SESSION_DIR/ssh_config"
+CFG="$LOCAL_SSH_CONFIG"; touch "$CFG"; chmod 600 "$CFG" 2>/dev/null || true
+write_session_ssh_defaults "$LOCAL_SESSION_DIR"
+
+# Raw connection (explicit user/port/key/jump host) → create a session-local managed alias carrying
 # those exact params, so sshfs and the rule's `ssh <alias>` are stable. A bare alias/host is used
-# as-is.
+# through the session config's read-only Include of the user's ~/.ssh/config plus Host * defaults.
 RAW_CONN=0; { [ -n "$V_PORT" ] || [ -n "$V_USER" ] || [ -n "$V_IDENTITY" ] || [ -n "$V_PROXYJUMP" ]; } && RAW_CONN=1
 if [ "$RAW_CONN" = 0 ]; then
   SALIAS="$V_HOST"
-  ok "Using ssh target: ${_B}$SALIAS${_0}"
+  ok "Using ssh target: ${_B}$SALIAS${_0} (session config keeps runtime files under ~/.remote-harness)"
 else
   SALIAS="$(printf '%s' "$V_HOST" | LC_ALL=C tr -c 'A-Za-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')-dev"
-  cp "$CFG" "$CFG.rh-bak.$(date +%Y%m%d%H%M%S 2>/dev/null || echo bak)" 2>/dev/null || true
   if write_managed_alias "$SALIAS" \
-      "    StrictHostKeyChecking accept-new" \
-      "    ServerAliveInterval 30" "    ServerAliveCountMax 3" \
-      "    ControlMaster auto" "    ControlPath ~/.ssh/cm-%C" "    ControlPersist 5m"; then
+      "    ServerAliveInterval 30" "    ServerAliveCountMax 3"; then
     chmod 600 "$CFG" 2>/dev/null || true
-    ok "ssh config: wrote managed 'Host $SALIAS' (HostName ${V_HOST:-?}, port ${V_PORT:-22}, user ${V_USER:-<login default>})"
+    ok "ssh config: prepared session Host '$SALIAS' (HostName ${V_HOST:-?}, port ${V_PORT:-22}, user ${V_USER:-<login default>})"
   else
-    err "ssh config: could not write managed Host '$SALIAS'"
+    err "ssh config: could not write session Host '$SALIAS'"
     exit 2
   fi
 fi
 # Reachability (best effort) — warn if it'd prompt for a password (sshfs + builds would too).
-if ssh -o BatchMode=yes -o ConnectTimeout=8 "$SALIAS" true 2>/dev/null; then
+ssh_probe=(ssh -F "$LOCAL_SSH_CONFIG" -o BatchMode=yes -o ConnectTimeout=8)
+if "${ssh_probe[@]}" "$SALIAS" true 2>/dev/null; then
   ok "Server reachable (key auth): $SALIAS"
 else
   warn "Couldn't key-auth to '$SALIAS' non-interactively — sshfs and build commands may prompt for"
@@ -120,7 +132,7 @@ fi
 
 # ---- local mountpoint ------------------------------------------------------
 PROJ_NAME="$(basename "$RPATH")"
-[ -n "$MP" ] || MP="$HOME/remote-harness-mounts/$PROJ_NAME"
+[ -n "$MP" ] || MP="$HOME/.remote-harness/mounts/$PROJ_NAME"
 MP="${MP%/}"; LOCAL_MP="$MP"
 mkdir -p "$(dirname "$MP")" 2>/dev/null || true
 
@@ -130,7 +142,8 @@ trap cleanup EXIT INT TERM HUP
 hdr "Mounting the server project locally"
 while :; do
   say "  ${_B}$SALIAS:$RPATH${_0} → ${_B}$MP${_0}"
-  MOUNT_OUT=$("$SCRIPTS/mount-project.sh" --alias "$SALIAS" --remote-path "$RPATH" --mountpoint "$MP" 2>/dev/null || true)
+  mount_args=(--alias "$SALIAS" --remote-path "$RPATH" --mountpoint "$MP" --ssh-config "$LOCAL_SSH_CONFIG")
+  MOUNT_OUT=$("$SCRIPTS/mount-project.sh" "${mount_args[@]}" 2>/dev/null || true)
   STATUS=$(printf '%s\n' "$MOUNT_OUT" | awk -F= '/^STATUS=/{print $2; exit}')
   case "$STATUS" in
     mounted|already-mounted) ok "Mounted ${RPATH} (on $SALIAS) → $MP"; MOUNTED=1; break;;
@@ -156,7 +169,7 @@ while :; do
 done
 
 # ---- inject the run-on-server rule (locally; scoped to this session) -------
-rh_out=$("$SCRIPTS/inject-rule.sh" on "$LAUNCH_BASE" "$RPATH" "$SALIAS" "$MP" "$YOLO" 2>/dev/null || printf 'RH_STATUS=ERROR\n')
+rh_out=$("$SCRIPTS/inject-rule.sh" on "$LAUNCH_BASE" "$RPATH" "$SALIAS" "$MP" "$YOLO" "$LOCAL_SSH_CONFIG" 2>/dev/null || printf 'RH_STATUS=ERROR\n')
 if [ "$(printf '%s\n' "$rh_out" | sed -n 's/^RH_STATUS=//p' | head -1)" = INJECTED ]; then
   RULE_INJECTED=1
   rh_env=$(printf  '%s\n' "$rh_out" | sed -n 's/^RH_LAUNCH_ENV=//p'   | head -1)

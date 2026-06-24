@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # remote-harness / connect-guesses.sh
-# Best-effort GUESSES for how the laptop connects to THIS box, for the agent to offer the user
-# (who confirms one or types the real command). NAT usually hides the true public address/port,
-# so these are hints only — the user's own answer is authoritative.
+# Legacy/opt-in best-effort GUESSES for how the laptop connects to THIS box. The current simple path
+# uses suggest-via.sh for a narrower server-side default and asks the user locally. NAT usually hides
+# the true public address/port, so these are hints only — the user's own answer is authoritative.
 # Prints one candidate `ssh ...` command per line (most-likely first).
 set -uo pipefail
 

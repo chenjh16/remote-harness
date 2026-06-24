@@ -1,114 +1,81 @@
-# Forward direction — agent local, code on a directly-reachable remote server
+# Simple forward reference
 
-You (the agent) run on the user's LOCAL machine; the project lives on a remote server the machine
-can ssh to directly. No tunnel — everything runs locally + direct ssh, so the skill and the emitted
-command both run on THIS machine. Keep the same continuous, question-tool-gated flow (honor the
-**"Confirm, don't infer"** rule and cross-agent question tool policy from SKILL.md); the only
-legitimate stops are an sshfs-install gate and the final hand-off. Helper-script contracts:
-`$RH/reference/scripts.md`.
+Simple forward means: Codex or another coding agent runs locally, while the project files and
+development environment live on an SSH server. The user says things like "本地开发远程项目" or
+"local Codex with server project". The skill still emits the same `simple-bootstrap.sh` entry point,
+with `--mode forward`.
 
-**Speed: ask, don't fish.** This must be fast — a few questions and the local command is ready.
-**Never scan the server to discover the project** (no `list-projects.sh --via`, no `ssh <server>
-'find …'`): it's slow and low-value. The user **types** the server project path; recommend only from
-cheap signals — the per-server cache (`session-cache.sh`), `~/.ssh/config`, `server-guesses.sh` — and
-always offer a typed "Other". The mount validates the path; a wrong one just re-prompts.
+## Boundary
 
-## F-0 — Preflight (local)
+- File reads, writes, edits, and searches happen in the local sshfs mount.
+- Build, run, test, install, lint, format, language-server, migration, mutating git, and other
+  project/toolchain commands must run on the server through `ssh <alias> 'cd <project> && <cmd>'`.
+- The simple path does not scan the server for project directories. The user types the server path;
+  cached values are prompt defaults only.
 
-```bash
-"$RH/scripts/preflight.sh" --direction forward --no-list
-```
-- `BLOCKED_STEP=sshfs` → show the OS-aware `REMEDY`, AskUserQuestion ("installed? ✅/⚠️"), re-run on
-  ✅. Loop until `PREFLIGHT=ok`. (`PROJECT_DIR_EMPTY` = the LOCAL cwd; decides the mountpoint in F-2.5.)
+## SSH State
 
-## F-1 — Pick the server (how you ssh to it)
+Every server target is used through a session-local ssh config under local
+`~/.remote-harness/.sessions/...`. If the user provides a Host alias, that alias is resolved through
+the session config. If the user provides raw SSH args such as `-p 2222 dev@example.com`,
+`local-setup.sh` creates a session-local `<host>-dev` alias there. It does not create or modify
+anything under local `~/.ssh`; temporary `known_hosts` and ControlPath sockets stay under
+`~/.remote-harness/.sessions/...`. The temp config is hidden from the launched agent with a session
+`ssh` wrapper.
 
-```bash
-"$RH/scripts/server-guesses.sh"   # candidate `ssh <target>` lines (config aliases / known_hosts / history)
-```
-**AskUserQuestion**: "Which server hosts your project (how do you ssh to it)?"
-- Claude/chat may show the useful guesses directly. Codex structured input must offer only the best
-  2-3 guesses (e.g. `ssh myserver`, `ssh dev@10.0.0.5`); the client-provided Other/free-form answer
-  remains the place for the real command, e.g. `ssh -p 2222 dev@server.example.com`.
-- Extract `CONNECT` = ssh args without the leading `ssh` (e.g. `myserver`, or `-p 2222 dev@host`).
-- Supported raw `CONNECT` forms are a host/alias, optional `user@host`, `-p`/`-l`/`-i`, and `-J` /
-  `-o ProxyJump=...` with tokens that do not need shell quoting. For complex SSH behavior
-  (`ProxyCommand`, `-F`, quoted paths with spaces, local forwards, etc.), tell the user to put that
-  in `~/.ssh/config` as a `Host` alias and provide the alias.
+## Bootstrap Shape
 
-## F-2 — Pick the project dir on the server (type it; don't scan)
+Local install:
 
 ```bash
-"$RH/scripts/session-cache.sh" get "<SERVER_TOKEN>"                            # LAST_PROJECT_DIR/LAST_MOUNTPOINT (empty on first run)
-"$RH/scripts/preflight.sh" --direction forward --server '<CONNECT>' --no-list  # reachability ONLY — no project scan
+RH_LANG=<lang> bash "${RH_HOME:-$HOME/.remote-harness}/scripts/simple-bootstrap.sh" \
+  --mode forward --launch <launch>
 ```
-- `SERVER_REACHABLE=0` → help fix ssh/keys (they may just be prompted for a password — warn the
-  session won't be non-interactive), then re-run. Do NOT end the turn.
-- **AskUserQuestion**: "Which project directory on the server?" Pre-fill `LAST_PROJECT_DIR` if cached;
-  otherwise the user **types the absolute server path** (e.g. `/srv/app`) via Other. Do NOT scan the
-  server (`list-projects.sh` / `ssh … find`) — it's slow and low-value; the typed path is validated
-  when the mount runs. → `REMOTE_PROJECT_DIR`. (`<SERVER_TOKEN>` = the `HOST`/alias token from F-1,
-  used as the cache key.)
 
-## F-2.5 — Confirm the local mountpoint (required)
-
-**AskUserQuestion** "Where on THIS machine should the project mount and the agent launch?"
-(pre-fill `LAST_MOUNTPOINT` from the cache if present and still empty):
-- "Here: `<cwd>` (my current dir)" — only if empty (`PROJECT_DIR_EMPTY=1`); pre-select when empty.
-  → pass `--mountpoint '<cwd>'`.
-- "A fresh `~/remote-harness-mounts/<name>` dir (auto)" — pre-select when the cwd is non-empty.
-  → OMIT `--mountpoint`.
-- Other (a different EMPTY local dir) → pass `--mountpoint '<that dir>'`.
-
-## F-3 — Emit the local command — then you are done
-
-Use the `<LOCAL_MP>` (and whether to pass `--mountpoint`) decided in **F-2.5**, and the
-`<REMOTE_PROJECT_DIR>` from **F-2** — both user-confirmed, not guessed.
-
-Before emitting, remember the choices so a re-run for this server pre-fills instantly:
+Remote script source:
 
 ```bash
-"$RH/scripts/session-cache.sh" put <SERVER_TOKEN> \
-  "LAST_PROJECT_DIR=<REMOTE_PROJECT_DIR>" "LAST_VIA=<CONNECT>" \
-  "LAST_MOUNTPOINT=<LOCAL_MP>" "LAST_LAUNCH=<LAUNCH>"
+(
+set -f
+p='remote-harness source SSH target/args'
+d='<default_via>'
+printf '%s' "$p${d:+ [$d]}: " >/dev/tty
+IFS= read -r h </dev/tty || exit 2
+h=${h:-$d}; h=${h#ssh }; [ -n "$h" ] || exit 2
+mkdir -p "$HOME/.remote-harness/.sessions"
+s=$(mktemp -d "$HOME/.remote-harness/.sessions/fetch.XXXXXX") || exit 1
+trap 'rm -rf "$s"' EXIT
+ssh -n -o ClearAllForwardings=yes \
+  -o UserKnownHostsFile="$s/known_hosts" \
+  -o GlobalKnownHostsFile=/dev/null \
+  -o StrictHostKeyChecking=accept-new \
+  -o ControlMaster=no -o ControlPath=none \
+  $h \
+  'cat "${RH_HOME:-$HOME/.remote-harness}/scripts/simple-bootstrap.sh"' |
+  RH_VIA="$h" RH_LANG=<lang> bash -s -- --mode forward --launch <launch>
+)
 ```
 
-Print **exactly** (short, `\`-continued lines):
+The source SSH target only loads remote-harness scripts. Forward mode still asks locally for the
+project server SSH target.
 
-```
-"$HOME/.remote-harness/scripts/local-setup.sh" \
-  --via <CONNECT_Q> --remote-path <REMOTE_PROJECT_DIR_Q> \
-  [--mountpoint <LOCAL_MP_Q>] --launch <LAUNCH> [--yolo]
-```
-- `<LAUNCH>` = the CLI of the agent you are running in (claude/codex/opencode).
-- `[--yolo]` only if the user asked to bypass approvals.
-- Every `<..._Q>` placeholder is a shell word quoted with `sq()` semantics. Example:
-  `/srv/O'Neil/app` becomes `'/srv/O'\''Neil/app'`. Apply this to `--via`, `--remote-path`, and
-  `--mountpoint`.
+## Runtime Flow
 
-Tell the user:
+1. `simple-bootstrap.sh` runs locally and delegates to `simple-dispatch.sh --mode forward`.
+2. `simple-local-setup.sh` prompts locally for the server SSH target, server project directory,
+   optional local mountpoint, and YOLO preference when not already explicit.
+3. It saves confirmed defaults in `~/.remote-harness/simple-forward-cache.env`.
+4. `local-setup.sh` prepares the session ssh config/server alias, mounts `<server-alias>:<project>`
+   locally with `mount-project.sh`, and passes the session ssh config to `inject-rule.sh`.
+5. `inject-rule.sh` creates a session-local rule and optional ssh wrapper.
+6. The chosen local agent launches in the mount.
+7. On exit, cleanup unmounts sshfs, removes the session rule, removes the temp ssh config, and
+   removes the default mountpoint directory when it is empty.
 
-> Run this **in a fresh local terminal** (the agent will take over that terminal). It will:
-> 1. Ensure a stable ssh alias to your server (writing a `<host>-dev` alias if you gave raw args)
-> 2. sshfs-mount the server's project onto a local dir
-> 3. Launch the agent there — builds/tests run on the server (`ssh <alias> ...`), your edits are live
->
-> When you exit, the mount is removed automatically. Start remote-harness again to reconnect
-> (`/remote-harness` in Claude Code/opencode, `$remote-harness` in Codex).
+## Troubleshooting
 
-**Your turn ends here** — `local-setup.sh` is self-contained and interactive on the local side.
-
-### Troubleshooting (forward)
-- **Prompted for a password** (sshfs/builds) → set up an ssh key to the server; the managed
-  `<host>-dev` alias will then be non-interactive. Until then the session prompts.
-- **`not-empty`** → the chosen local mountpoint isn't empty; the script prompts for another (or pass
-  `--mountpoint <empty-dir>`).
-- **macOS sshfs without macFUSE** → the mount step surfaces a **no-kext** install
-  (`brew install macos-fuse-t/homebrew-cask/fuse-t && brew install macos-fuse-t/homebrew-cask/sshfs-fuse-t`)
-  and retries after you install it. FUSE-T needs **no kernel extension and no reduced system
-  security**, and keeps sshfs's synchronous writes (so edits land on the server before remote
-  builds). Avoid macFUSE (it requires lowering security).
-  - *Fallback if FUSE-T misbehaves:* `rclone` (`brew install rclone`, configure an sftp remote, then
-    `rclone nfsmount remote:/path <mp> --vfs-cache-mode full --vfs-write-back 0`) — also kext-less,
-    but writes are **asynchronous**, so an edit immediately followed by a remote build may briefly
-    see the old file. Prefer FUSE-T for this skill's edit-here / build-on-server loop.
+- Password prompts: configure SSH key auth to the server for smooth sshfs and command execution.
+- `not-empty`: choose a different empty local mountpoint.
+- macOS sshfs: use FUSE-T, not macFUSE. The install hint is surfaced by `mount-project.sh`.
+- Remote command fails immediately after an edit: re-run once in case the mount had not flushed yet;
+  do not run build/install tools locally.

@@ -66,6 +66,29 @@ ssh_config_value() {
   esac
 }
 
+# Write per-session SSH defaults that keep SSH runtime files out of ~/.ssh.
+# Callers may append Host blocks after this prelude. If a user-managed
+# ~/.ssh/config exists it is included read-only, after the defaults, so HostName,
+# User, Port, IdentityFile, ProxyJump, etc. still resolve for aliases while
+# known_hosts and ControlPath stay inside the remote-harness session directory.
+write_session_ssh_defaults() {
+  _wssd_dir="$1"
+  _wssd_kh="${2:-$_wssd_dir/known_hosts}"
+  _wssd_cp="${3:-$_wssd_dir/cm-%C}"
+  {
+    printf 'Host *\n'
+    printf '    UserKnownHostsFile %s\n' "$(ssh_config_value "$_wssd_kh")"
+    printf '    GlobalKnownHostsFile /dev/null\n'
+    printf '    StrictHostKeyChecking accept-new\n'
+    printf '    ControlMaster auto\n'
+    printf '    ControlPath %s\n' "$(ssh_config_value "$_wssd_cp")"
+    printf '    ControlPersist 5m\n'
+    if [ -r "$HOME/.ssh/config" ]; then
+      printf 'Include %s\n' "$(ssh_config_value "$HOME/.ssh/config")"
+    fi
+  } >> "$CFG"
+}
+
 # ---- OS detection (sets OS / PLAT / IS_WSL at source time) -----------------
 OS="$(uname -s 2>/dev/null || echo unknown)"; IS_WSL=0
 case "$OS" in

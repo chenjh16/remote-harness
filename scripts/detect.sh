@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # remote-harness / detect.sh
-# Read-only environment probe. Makes NO changes. Prints KEY=VALUE lines on stdout
-# for the agent to parse, plus a human summary on stderr.
+# Legacy/compatibility read-only environment probe. Makes NO changes. Current simple flows do not
+# expose its guesses to the agent; keep it for old diagnostics and stable-port regression tests.
+# Prints KEY=VALUE lines on stdout plus a human summary on stderr.
 set -uo pipefail
 
 emit() { printf '%s=%s\n' "$1" "$2"; }
@@ -25,11 +26,13 @@ note "== remote-harness: probing environment =="
 # --- Which side are we on? -------------------------------------------------
 if [ -n "${SSH_CONNECTION:-}" ]; then
   emit ON_REMOTE 1
-  emit CLIENT_IP "$(printf '%s' "$SSH_CONNECTION" | awk '{print $1}')"
-  note "We are the REMOTE box (reached via SSH from ${SSH_CONNECTION%% *})."
+  emit SERVER_IP "$(printf '%s' "$SSH_CONNECTION" | awk '{print $3}')"
+  emit SERVER_PORT "$(printf '%s' "$SSH_CONNECTION" | awk '{print $4}')"
+  note "We are the REMOTE box (SSH client address suppressed by the privacy boundary)."
 else
   emit ON_REMOTE 0
-  emit CLIENT_IP ""
+  emit SERVER_IP ""
+  emit SERVER_PORT ""
   note "No SSH_CONNECTION: this shell was not opened over SSH. remote-harness is"
   note "designed to run on the remote dev box; continue only if you know why."
 fi
@@ -125,7 +128,7 @@ emit EPHEMERAL_LOW "$low"
 # --- (hash RU -> a port in [20002,29992], step 10, ends in 2, below the ephemeral floor; 1000 slots
 # --- so distinct users rarely collide) so the SAME user reconnects to the SAME port (clean reuse);
 # --- then probe for a free slot. Otherwise (or if that range overlaps the ephemeral floor) fall back
-# --- to the legacy "highest free port ending in 22". setup-tunnel.sh derives the same way from the
+# --- to the old "highest free port ending in 22" fallback. setup-tunnel.sh derives the same way from the
 # --- CONFIRMED namespace — KEEP THE SLOT FORMULA (20002 + (cksum%1000)*10) IN SYNC with this.
 inuse_ports="$(listening_ports)"
 free_port() { ! printf '%s\n' "$inuse_ports" | grep -qx "$1"; }

@@ -1,71 +1,203 @@
 ---
 name: remote-harness
 description: >-
-  搭建一套开发 harness，将运行在不同机器上的编程代理与代码库连接起来，支持双向工作模式。当用户执行
-  /remote-harness（Claude Code/opencode）或 $remote-harness（Codex 技能调用）时调用。反向模式：代理运行在远程主机，代码在用户的笔记本（NAT 内网）——建立反向
-  SSH 隧道。正向模式：代理在本地运行，代码在可直接 ssh 访问的远程服务器上。两种模式均通过 sshfs 将
-  代码挂载到代理所在目录，指示代理在代码所在机器上执行构建/测试，并输出一条一键粘贴命令完成全部操作
-  （挂载 + 启动 claude/codex/opencode）。支持 Linux/WSL/macOS。
+  将 coding-agent 会话连接到另一台机器上的项目，并避免在聊天中收集具体路径或凭据。支持 simple reverse
+  （Agent 在远端机器，项目在用户笔记本）和 simple forward（Agent/Codex 在本地，项目与开发环境在 SSH
+  服务器）。调用时只返回一条本地 bootstrap 命令；该命令在用户终端中提示输入信息，通过 sshfs 挂载项目，
+  注入“在项目所在机器运行命令”的规则，并在挂载目录中启动 claude/codex/opencode。
 ---
 
 > 中文版。英文原版见 [SKILL.md](SKILL.md)（以英文版为准）。
 
 # Remote Harness
 
-本文件是精简入口。按照**渐进式披露**原则，此处仅覆盖必须了解的内容（技能的功能、交互规则以及方向选择）；各方向的详细流程与辅助脚本契约位于 `$RH/reference/` 目录——按需阅读对应文件即可。
+默认模式是 **simple reverse**。当用户明确要求本地 Codex/Agent 连接服务器上的项目或开发环境时，
+使用 **simple forward**。
 
-## 技能功能
+根据用户的简短说法推断模式：
 
-编程代理与代码库位于**两台不同的机器**上。本技能将代码挂载到代理所在位置并在那里启动代理，支持以下两种方向：
+- Simple forward：例如 "本地开发远程项目"、"本地开发服务器项目"、"local dev remote project"、
+  "local Codex with server project"、"project/dev environment on server"。
+- Simple reverse：例如 "远程开发本地"、"远程开发本地项目"、"远端开发本地"、"remote dev local project"、
+  "remote agent with laptop project"。
+- 模糊：如果无法准确推定 forward 或 reverse，返回不带 `--mode` 的统一命令。模式提示默认
+  reverse，并像其他 simple 选择一样缓存在本地。
 
-- **反向模式** — 代理运行在**远程主机**；代码在用户的**笔记本**（NAT 内网）。远程主机无法主动连接笔记本，因此由笔记本发起**反向 SSH 隧道**，再将笔记本项目通过 sshfs 挂载到远程主机。
-- **正向模式** — 代理在**本地**运行（笔记本/WSL/Mac）；代码在**可直接 ssh 访问的远程服务器**上。无需隧道：直接将服务器上的项目 sshfs 挂载到本地目录。
+## 模式
 
-两种模式的不变量相同：将代码 sshfs 挂载到代理所在的**空目录**，注入一条规则使构建/测试**在托管代码的机器上执行**（通过 `ssh <alias>`），然后在挂载目录中启动代理（claude/codex/opencode）。通用定义：**A** = 代理所在机器；**P** = 代码所在机器（通过 ssh `<alias>` 引用）。
+Simple reverse：
 
-## 交互规则——保持流程连贯
+- 编程 Agent 运行在远端机器。
+- 代码库在用户笔记本上。
+- Agent 不询问本地笔记本信息、本地路径、远端挂载路径、反向端口或命名空间。
+- Agent 可以只基于服务器侧事实生成一个远端 SSH target 默认建议值。
+- Agent 的任务只是返回一条命令和简短说明。
+- 所有具体值都在用户本地终端里输入，不进入聊天上下文。
+- 保护本地/客户端信息。若从 `SSH_CONNECTION` 推导默认值，只能使用第 3/4 字段（`server-ip` /
+  `server-port`），绝不能暴露第 1/2 字段（`client-ip` / `client-port`）。
+- SSH 提示默认值的优先级是：本地缓存优先，其次远端建议值；用户始终可以编辑覆盖。
 
-本技能是**一个由代理驱动的完整连续流程**，从选择方向到交付最终命令一气呵成。当某个步骤需要用户决策或受阻时，使用当前代理运行时提供的最佳交互输入通道——绝不跳过必须确认的步骤，也绝不在某个决策尚未回答时继续执行。
+Simple forward：
 
-> **确认，不推断（必须执行）。** 检测到的值——方向、待开发的项目/代码库、代理将启动的挂载点，以及（反向模式、服务器账号可能被多人共享时）给反向隧道命名的按真实用户**命名空间 `RU`**——仅是预填入问题的**默认值**，绝非最终决策。在输出最终命令前，必须逐一获取用户对每一项的明确答复。自动检测（例如 `SSH_CONNECTION` → 方向，cwd → 挂载点，`REALUSER_GUESS` → 命名空间）仅用于预选最可能的选项，**不得跳过提问**。绝不默默假定用户意图。
+- 编程 Agent 运行在本地。
+- 项目和开发环境位于可直接 SSH 访问的服务器。
+- 命令在本地提示服务器 SSH target、服务器项目目录、可选本地挂载点和启动偏好。
+- 文件读取、写入、编辑、搜索都在本地 sshfs 映射目录中进行。
+- 构建、运行、测试、安装依赖、formatter、linter、language server、会修改状态的 git 命令，以及其他项目工具，
+  必须通过 `ssh <server-alias> 'cd <project> && <cmd>'` 在服务器执行。
 
-> **速度——问，别钓（必须执行）。** 把整个流程控制在几个问题内。本地**只探测一次**（把辅助脚本合并进一个 Bash 调用；绝不为读 stderr 把脚本跑两遍），然后把用户决策合并进尽量少的 AskUserQuestion 轮次。**绝不通过远程搜索去发现用户的项目**——不要 `list-projects.sh --via`，不要 `ssh <alias> 'find …'`/`ls`。它慢，而且经常带偏（项目可能在一个与检测猜测**不同**的远程账户下）。推荐只来自便宜的本地/缓存信号——`session-cache.sh`、`~/.ssh/config`、cwd、连接/服务器猜测——并永远提供"自己输入"。输入的路径由 setup 脚本校验，错了会重新提示。
+旧的 Agent 引导式 reverse 流程已经从默认产品面清理掉。reverse、forward 和无法判断的请求都使用统一的
+simple bootstrap 流程。
 
-> **跨代理提问工具策略：** 步骤中凡写"**AskUserQuestion**"，都应优先使用当前运行时可用的结构化用户输入工具。Claude Code：使用 `AskUserQuestion`。Codex：如果当前工具列表中有 `request_user_input` 且它在当前协作模式下可用，就用它进行该项决策；该工具会等待用户回答，并可能自动提供 `Other` 自由输入项。如果 Codex 提示 `request_user_input` 不可用（常见原因是会话处于 Default mode，且未启用 `default_mode_request_user_input` 功能），则退化为在聊天中提出一个简洁问题并等待回复。opencode：在聊天中提问并等待。聊天退化路径中，只有在能明显减少往返且回答格式清楚时，才把强相关决策合并提问（最多三项）。
+## 运行时
 
-> **Codex 结构化输入限制：** Codex 的 `request_user_input` 每个问题只支持 2-3 个显式选项，并由客户端提供自由输入的 `Other` 选项。当 SSH 候选、项目路径或挂载点很多时，先在聊天里概述较长列表，再把最佳 2-3 个选项放进结构化问题。务必保留 `Other`/自由输入路径，让用户填写真实 SSH 命令、项目目录或挂载点。
+按当前 Agent 运行时设置启动命令：
 
-**唯一允许停止的情形：**
-- `sshfs` 被阻塞：给出安装命令，AskUserQuestion（"已安装？ ✅/⚠️"），✅ 后重新执行。
-- 交付最终命令后：安装脚本接管（自包含 + 在目标机器上交互运行）。**代理在交付该命令后即完成任务。**
+- Codex：`--launch codex`
+- Claude Code：`--launch claude`
+- opencode：`--launch opencode`
 
-## 调用选项
+如果用户调用时要求 "yolo"、"bypass approvals"、"skip permissions"、"危险模式"、"免审批" 或
+"开启yolo模式"，在最终本地命令参数末尾追加 `--yolo`。否则不要追加。
+如果因为用户要求而追加了 `--yolo`，本地向导必须把它视为最终选择，不再二次询问是否开启
+YOLO/免审批模式。
 
-用户调用时可附带自由格式的请求（例如 `/remote-harness 开启yolo模式`、`/remote-harness yolo`、`$remote-harness yolo模式，中文`、"...bypass approvals"）。解析意图并在输出命令时应用：
-
-- **YOLO / 跳过审批**（以下任意一种："yolo"、"bypass approvals"、"skip permissions"、"危险模式"、"免审批"、"开启yolo模式"）→ 在输出的命令中添加 `--yolo`（安装脚本会按代理类型做相应映射）。若意图不明确，确认一次；否则直接应用。若未传入，则正常启动。
-
-## 参考文档（按需阅读）
+仅 simple reverse：回复前，如可行，先运行：
 
 ```bash
-RH="${RH_HOME:-$HOME/.remote-harness}"
-[ -d "$RH/scripts" ] || echo "scripts missing — run: manage.sh"
+bash "${RH_HOME:-$HOME/.remote-harness}/scripts/suggest-via.sh"
 ```
 
-- 辅助脚本契约（`KEY=VALUE` 输出、`inject-rule.sh` 等）：**`$RH/reference/scripts.cn.md`**
-- **反向模式**流程（预检 → 建立隧道 → 输出笔记本命令）：**`$RH/reference/reverse.cn.md`**
-- **正向模式**流程（预检 → 选择服务器/目录 → 输出本地命令）：**`$RH/reference/forward.cn.md`**
+仅当输出 `STATUS=ok` 时，把它的 `VIA=` 值填入 `<default_via>`；否则省略
+`RH_DEFAULT_VIA=...` 前缀。这个值只是提示默认值。不要把辅助脚本输出原样放进回复。
 
-从每个脚本的 stdout 中解析 `KEY=VALUE`；人类可读的提示信息输出到 stderr。
+## 输出给用户
 
----
+### 统一命令
 
-## 步骤 −1 — 选择方向（必须询问——绝不默默决定）
+reverse、forward 和不确定模式都输出同一个脚本入口：`scripts/simple-bootstrap.sh`。命令总是在本地执行，
+但脚本本身可能在本地，也可能需要从安装了这个 skill 的远端机器读取。用 fenced `bash` 代码块返回，不要放进
+项目符号或编号列表。命令要优先保证可复制：尽量少行，但每一行都不能长到容易被 Codex/聊天界面自动换行切断。
+`simple-bootstrap.sh` 会委托给 `simple-dispatch.sh`；用户不直接调用 dispatcher。
 
-**无论能否猜到，都必须询问用户选择哪个方向。** 使用上面的跨代理提问工具策略——"您的代码相对于我的运行位置在哪里？"：
-- **反向模式** — "我在远程主机上；我的代码在我的笔记本（NAT 内网）里。"
-- **正向模式** — "我在本地运行；我的代码在我可以 ssh 访问的远程服务器上。"
+当请求明确是远端 Agent 开发本地笔记本项目时，使用 `--mode reverse`。当请求明确是本地 Agent 开发服务器项目时，
+使用 `--mode forward`。当请求无法判断时，省略 `--mode`；dispatcher 会在本地询问，第一次默认
+reverse，并缓存模式选择。
 
-检测结果仅用于预选最可能的选项（**不得跳过提问**）：`SSH_CONNECTION` 已设置（或 `detect.sh` → `ON_REMOTE=1`）⇒ 预选**反向模式**；未设置 ⇒ 预选**正向模式**。等待用户的明确答复。
+如果用户运行命令的本机已经安装 remote-harness，使用本地形式：
 
-然后**阅读 `$RH/reference/reverse.cn.md` 或 `$RH/reference/forward.cn.md`**，按所选方向逐步执行，并对每个选择遵守"确认，不推断"原则。
+```bash
+RH_LANG=<lang> bash "${RH_HOME:-$HOME/.remote-harness}/scripts/simple-bootstrap.sh" \
+  <mode-arg> --launch <launch>
+```
+
+如果 skill/source 目录在远端机器上，或者不确定本地是否已有安装，使用 fetch 形式。把
+`<source_prompt>` 替换成 `remote-harness 来源 SSH 目标/参数` 或
+`remote-harness source SSH target/args`，把 `<default_via>` 替换成远端建议值或空字符串，
+并使用同样的 `<mode-arg>` 规则：
+
+```bash
+(
+set -f
+p='<source_prompt>'
+d='<default_via>'
+printf '%s' "$p${d:+ [$d]}: " >/dev/tty
+IFS= read -r h </dev/tty || exit 2
+h=${h:-$d}; h=${h#ssh }; [ -n "$h" ] || exit 2
+mkdir -p "$HOME/.remote-harness/.sessions"
+s=$(mktemp -d "$HOME/.remote-harness/.sessions/fetch.XXXXXX") || exit 1
+trap 'rm -rf "$s"' EXIT
+ssh -n -o ClearAllForwardings=yes \
+  -o UserKnownHostsFile="$s/known_hosts" \
+  -o GlobalKnownHostsFile=/dev/null \
+  -o StrictHostKeyChecking=accept-new \
+  -o ControlMaster=no -o ControlPath=none \
+  $h \
+  'cat "${RH_HOME:-$HOME/.remote-harness}/scripts/simple-bootstrap.sh"' |
+  RH_VIA="$h" RH_LANG=<lang> bash -s -- <mode-arg> --launch <launch>
+)
+```
+
+`<mode-arg>` 为：
+
+- 明确 simple reverse 时：`--mode reverse`；
+- 明确 simple forward 时：`--mode forward`；
+- 不确定模式时：省略。
+
+只有当调用中明确要求 YOLO/免审批/无审核模式时，才追加 `--yolo`。在 fetch 形式中，source SSH target
+只是 remote-harness 脚本来源；reverse 模式会复用它作为远端盒子 target，forward 模式仍会在本地另行询问项目服务器 target。
+
+用户应在新开的本地终端运行命令。
+
+### Simple Reverse
+
+命令启动后，终端会询问：
+
+- 远端 SSH target/args 或 Host 别名，并以上次本地缓存值作为默认；若无缓存，则使用远端建议值；
+- 本地项目目录；
+- 可选远端挂载点，留空则使用远端 `~/.remote-harness/mounts/<project>`；
+- 是否用 YOLO/免审批模式启动，默认 yes，除非本地缓存记录为 no。若调用时已经明确要求 yolo，
+  且命令包含 `--yolo`，则跳过这个问题。
+
+脚本默认使用固定的本次会话笔记本别名 `rlocal`。在 simple 流程中，这个别名只写入远端临时
+ssh config：`~/.remote-harness/.sessions/.../ssh_config`，退出清理时删除；不会在远端
+`~/.ssh` 下创建或修改任何文件。笔记本侧携带 RemoteForward 的 alias 也只写到本地
+`~/.remote-harness/.sessions/.../ssh_config`，由 setup 脚本内部 ssh wrapper 隐藏，并在退出时清理；
+临时 SSH config、`known_hosts` 和 ControlPath socket 都位于 `~/.remote-harness/.sessions/...`，
+不会写入笔记本 `~/.ssh`。
+
+反向认证方面，远端会在自己的 `~/.remote-harness/keys` 下生成或复用 remote-harness key。本地 setup
+可以把这把公钥加入笔记本 `~/.ssh/authorized_keys` 中带
+`remote-harness:reverse-auth:<tag>` 标签的托管块，并用 `from="127.0.0.1,::1"` 限制为回环来源。
+追加前会先检查本机是否已有匹配且有效的授权；已有则复用，不重复追加。托管授权会在
+`~/.remote-harness/.sessions/authorized-keys/...` 下引用计数，退出时只有没有活动会话继续引用才删除。
+
+启动 Agent 时会在本次会话的 `PATH` 中加入临时 `ssh`
+包装器，所以注入规则里只需要写 `ssh rlocal ...`。
+
+脚本会把上次确认过的值记录在本地 `~/.remote-harness/simple-cache.env`，下次作为默认值展示。
+该缓存只在本地；删除此文件即可重置默认值。
+
+simple 流程暂不做目录推荐。
+
+### Simple Forward
+
+forward 模式启动后，终端会询问：
+
+- 服务器 SSH target/args 或 Host 别名，并以上次本地缓存值作为默认；
+- 服务器项目目录，并以上次本地缓存值作为默认；
+- 可选本地挂载点，留空则使用本地 `~/.remote-harness/mounts/<project>`；
+- 是否用 YOLO/免审批模式启动，默认 yes，除非本地缓存记录为 no。若调用时已经明确要求 yolo，
+  且命令包含 `--yolo`，则跳过这个问题。
+
+启动后的 Agent 工作在本地挂载目录中。注入规则允许本地文件读写、编辑和搜索，但要求项目命令通过
+SSH 在服务器执行。退出启动的 Agent 后，会自动卸载项目并删除本次会话规则。
+
+forward setup 始终使用本地 `~/.remote-harness/.sessions/.../ssh_config` 下的会话级 ssh config。
+当用户输入的是原始 SSH 参数而不是 Host alias 时，会在其中创建会话级 `<host>-dev` alias。它不会在本地
+`~/.ssh` 下创建或修改任何文件；临时 `known_hosts` 和 ControlPath socket 也位于
+`~/.remote-harness/.sessions/...`。临时 config 会通过同样的会话级 `ssh` wrapper 对启动后的 Agent 隐藏。
+
+## 前置条件
+
+- 脚本来源：remote-harness 已安装在本地 `~/.remote-harness`，或安装在 fetch 命令使用的 SSH source 机器上。
+- Simple reverse：远端已安装 remote-harness，默认在 `~/.remote-harness`，或者远端 `RH_HOME` 指向安装目录。
+- Simple reverse：笔记本可以用已配置好的 SSH key 登录远端。
+- Simple reverse：远端可以通过反向隧道登录笔记本。本地 setup 可以把 remote-harness 公钥作为带标签、
+  仅限回环来源的临时块写入 `~/.ssh/authorized_keys`，退出时删除；若本机已有匹配且有效的用户授权，
+  则直接复用且不修改。
+- Simple reverse：远端有 `sshfs` 和要启动的 Agent CLI。
+- Simple reverse：笔记本可以运行 SSH server；必要时 `laptop-setup.sh` 会检测并提示开启。
+- Simple forward：本地机器可以 SSH 登录服务器，并且本地有 `sshfs`；缺失时脚本会提示安装。
+
+## 更多细节
+
+可行性分析和完整方案见：
+
+- `docs/complete-flow.md`
+- `docs/complete-flow.cn.md`
+- `docs/complete-flow.html`
+- `docs/simple-flow.md`
+- `docs/simple-flow.cn.md`
+- `docs/simple-forward-flow.md`
+- `docs/simple-forward-flow.cn.md`

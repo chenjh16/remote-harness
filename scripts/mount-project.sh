@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # remote-harness / mount-project.sh
-# Mount a laptop directory (via `ssh <alias>`) onto a LOCAL path with sshfs so the agent edits
-# it as local files (changes land on the laptop). The default mountpoint is the CURRENT
-# directory (your Claude Code project dir) — and it must be EMPTY, so the remote project can
-# cleanly become the project root and the mount doesn't hide existing files. Use --unmount to
-# detach. Prints KEY=VALUE.
+# Mount a project directory from an SSH-reachable host onto a LOCAL path with sshfs so the agent
+# edits it as local files while changes land on the project host. The default mountpoint is the
+# current directory and must be empty, so the remote project can cleanly become the project root and
+# the mount does not hide existing files. Use --unmount to detach. Prints KEY=VALUE.
 #
-#   mount-project.sh --alias NAME --remote-path /path [--mountpoint DIR] [--force]
+#   mount-project.sh --alias NAME --remote-path /path --ssh-config FILE [--mountpoint DIR] [--force]
 #   mount-project.sh --alias NAME --unmount [--mountpoint DIR]
 set -uo pipefail
 
@@ -25,7 +24,7 @@ safe_ssh_token() {
   esac
 }
 
-sshfs_install_hint(){   # the right install command for THIS box's OS / package manager
+sshfs_install_hint(){   # the right install command for THIS machine's OS / package manager
   case "$(uname -s 2>/dev/null)" in
     Darwin) printf 'brew install macos-fuse-t/homebrew-cask/fuse-t && brew install macos-fuse-t/homebrew-cask/sshfs-fuse-t  (no kernel extension / no reduced security)';;
     *) if   command -v apt-get >/dev/null 2>&1; then printf 'sudo apt-get install -y sshfs'
@@ -37,21 +36,24 @@ sshfs_install_hint(){   # the right install command for THIS box's OS / package 
   esac
 }
 
-ALIAS="" RPATH="" MP="" UNMOUNT=0 FORCE=0
+ALIAS="" RPATH="" MP="" SSH_CONFIG="" UNMOUNT=0 FORCE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --alias)       need_arg "$1" "${2-}"; ALIAS="$2"; shift 2;;
     --remote-path) need_arg "$1" "${2-}"; RPATH="$2"; shift 2;;
     --mountpoint)  need_arg "$1" "${2-}"; MP="$2"; shift 2;;
+    --ssh-config)  need_arg "$1" "${2-}"; SSH_CONFIG="$2"; shift 2;;
     --unmount)     UNMOUNT=1; shift;;
     --force)       FORCE=1; shift;;
     *) shift;;
   esac
 done
-[ -n "$ALIAS" ] || { note "usage: mount-project.sh --alias NAME --remote-path /path [--mountpoint DIR] [--force]"; note "       mount-project.sh --alias NAME --unmount [--mountpoint DIR]"; exit 2; }
+[ -n "$ALIAS" ] || { note "usage: mount-project.sh --alias NAME --remote-path /path [--mountpoint DIR] [--ssh-config FILE] [--force]"; note "       mount-project.sh --alias NAME --unmount [--mountpoint DIR]"; exit 2; }
 safe_ssh_token "$ALIAS" || { note "unsafe ssh alias: $ALIAS"; exit 2; }
+case "$SSH_CONFIG" in *'
+'*) note "ssh config path contains a newline"; exit 2;; esac
 
-# Default mountpoint = current directory (the Claude Code project dir).
+# Default mountpoint = current directory.
 [ -n "$MP" ] || MP="$PWD"
 
 OS="$(uname -s 2>/dev/null || echo unknown)"
@@ -81,6 +83,7 @@ if [ "$UNMOUNT" = 1 ]; then
 fi
 
 [ -n "$RPATH" ] || { note "need --remote-path"; exit 2; }
+[ -n "$SSH_CONFIG" ] || { note "need --ssh-config (session-local config keeps SSH runtime files out of ~/.ssh)"; exit 2; }
 
 if [ -z "$SSHFS_BIN" ]; then
   emit STATUS need-sshfs; emit INSTALL_CMD "$(sshfs_install_hint)"
@@ -122,7 +125,9 @@ if [ "$FORCE" != 1 ] && [ -n "$(ls -A "$MP" 2>/dev/null)" ]; then
   exit 4
 fi
 
-err="$(mktemp "${TMPDIR:-/tmp}/rh-mount.XXXXXX")"
+RH_HOME="${RH_HOME:-$HOME/.remote-harness}"
+mkdir -p "$RH_HOME/.sessions" 2>/dev/null || true
+err="$(mktemp "$RH_HOME/.sessions/rh-mount.XXXXXX" 2>/dev/null)" || err="${RH_HOME}/.sessions/rh-mount.$$"
 # reconnect + keepalives so brief tunnel hiccups self-heal. idmap=user (libfuse sshfs) maps the
 # remote uid → ours; omitted on macOS, where FUSE-T's sshfs mounts via NFS and doesn't accept it.
 # We deliberately KEEP sshfs's default attribute/dir caching (no cache_timeout=0): disabling it
@@ -134,6 +139,7 @@ case "$OS" in
   Darwin) SSHFS_OPTS="reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks";;
   *)      SSHFS_OPTS="reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks,idmap=user";;
 esac
+SSHFS_OPTS="$SSHFS_OPTS,ssh_command=ssh -F $SSH_CONFIG"
 if "$SSHFS_BIN" "$ALIAS:$RPATH" "$MP" -o "$SSHFS_OPTS" 2>"$err"; then
   emit STATUS mounted
   emit MOUNTPOINT "$MP"

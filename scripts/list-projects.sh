@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # remote-harness / list-projects.sh
-# List candidate project directories. In normal remote-harness use the projects live on the
-# LAPTOP, so pass --via <ssh-alias> to scan there over the tunnel; without --via it scans
-# this machine. Read-only. Prints "PROJECT\t<path>\t<git:branch|->" lines, then TOTAL/SHOWN.
+# Opt-in helper to list candidate project directories. The default simple flows do not scan for
+# projects; the user types the path locally and cached values are only prompt defaults. Pass
+# --via <ssh-args|alias> to scan another SSH-reachable host; without --via it scans this machine.
+# Read-only. Prints "PROJECT\t<path>\t<git:branch|->" lines, then TOTAL/SHOWN.
 set -uo pipefail
 
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
@@ -47,7 +48,9 @@ else
   done
 fi
 [ $# -eq 0 ] && set -- "$HOME"
-tmp=$(mktemp "${TMPDIR:-/tmp}/rh-projects.XXXXXX") || exit 1
+rh_tmp="${RH_HOME:-$HOME/.remote-harness}/.sessions"
+mkdir -p "$rh_tmp" 2>/dev/null || true
+tmp=$(mktemp "$rh_tmp/rh-projects.XXXXXX" 2>/dev/null) || exit 1
 trap "rm -f \"$tmp\"" EXIT HUP INT TERM
 skip_dir() {
   # NOTE: use a private var name — `b`/`a`/`c`/`r` are the scan_projects loop vars,

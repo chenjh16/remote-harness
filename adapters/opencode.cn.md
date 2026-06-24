@@ -1,19 +1,19 @@
-> 中文版(参考)。功能性命令以英文版 [opencode.md](opencode.md) 为准。
+> 中文版（参考）。功能性命令以英文版 [opencode.md](opencode.md) 为准。
 
 ---
-description: 将此代理连接到另一台机器上的代码库（远程主机↔笔记本，或本地↔远程服务器）并进行 vibe 编程
+description: 通过 remote-harness simple 工作流将此 Agent 连接到另一台机器上的项目
 ---
 
-运行 **remote-harness** 工作流。
+运行 **remote-harness** simple 工作流。
 
-读取 `~/.remote-harness/SKILL.md` 并逐步执行（从"Step −1 — pick the
-direction"开始）；辅助脚本位于 `~/.remote-harness/scripts/`，会在 stdout 输出 `KEY=VALUE`。
-目标：将此代理与我的代码库（分布在不同机器上）连接起来，并进入项目目录，
-构建/测试在托管代码的那台机器上运行。技能总是先问哪个方向（会预选一个可能的默认值，但绝不替我决定）：
-**reverse** = 你在远程主机上，代码在我的笔记本上（NAT 后方，反向隧道）；
-**forward** = 你在本地，代码在我可以 ssh 到的远程服务器上（直接挂载）。
+读取 `~/.remote-harness/SKILL.md` 并立即返回 bootstrap 命令。不要在聊天中询问 SSH target、路径、端口或命名空间；这些信息会由命令在用户本地终端里提示输入。默认使用 simple reverse；当用户明确要求本地 Agent 连接 SSH 服务器上的项目/开发环境时，使用 simple forward。
+setup 脚本使用 `~/.remote-harness` 下的会话级 SSH config 和 wrapper。只有 reverse 模式下
+`authorized_keys` 临时托管块需要提到 `~/.ssh` 修改；不要暗示会编辑 config、known_hosts 或 SSH key。
 
-如需任何必要输入，请询问我并等待我的回复后再继续。
+因为这是 opencode 适配入口，输出命令必须使用：
 
-**你正在 opencode 中运行** — 因此在输出最终命令时，请加上 `--launch opencode`，
-以便启动 opencode（而非 Claude Code）。运行代理的机器上必须已安装 `opencode` CLI。
+```bash
+--launch opencode
+```
+
+如果用户要求 yolo / bypass approvals，则追加 `--yolo`。

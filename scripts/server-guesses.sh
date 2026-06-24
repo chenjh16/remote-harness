@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# remote-harness / server-guesses.sh — read-only. For the FORWARD direction (local agent → project
-# on a remote server), suggest OUTBOUND ssh targets for the skill to offer the user. Prints one
-# candidate `ssh <target>` per line on stdout (most-likely first, deduped); a NOTE on stderr.
-# The user's own answer is authoritative — these are only hints.
+# remote-harness / server-guesses.sh — read-only, opt-in. For the FORWARD direction (local agent →
+# project on a remote server), suggest OUTBOUND ssh targets only when the user explicitly asks for
+# help. The default simple wizard asks locally and uses its cache as the default. Prints one candidate
+# `ssh <target>` per line on stdout (most-likely first, deduped); a NOTE on stderr. The user's own
+# answer is authoritative — these are only hints.
 set -uo pipefail
 
 CFG="$HOME/.ssh/config"; KH="$HOME/.ssh/known_hosts"

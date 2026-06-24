@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # remote-harness / check-tunnel.sh
 # Verify the reverse tunnel: is the loopback listener up, and does `ssh <alias>` reach
-# the laptop? Read-only. Prints KEY=VALUE lines.
+# the laptop? Read-only. Prints KEY=VALUE lines. Pass --ssh-config FILE to resolve the
+# alias through a session-local config instead of ~/.ssh/config.
 set -uo pipefail
 
 emit() { printf '%s=%s\n' "$1" "$2"; }
@@ -26,22 +27,36 @@ listening_ports() {
     fi; } | sed -E 's/.*[:.]([0-9]+)$/\1/' | grep -E '^[0-9]+$' | sort -un
 }
 
-ALIAS="" PORT=""
+ALIAS="" PORT="" SSH_CONFIG=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --alias) need_arg "$1" "${2-}"; ALIAS="$2"; shift 2;;
-    --port)  need_arg "$1" "${2-}"; PORT="$2"; shift 2;;
+    --alias)      need_arg "$1" "${2-}"; ALIAS="$2"; shift 2;;
+    --port)       need_arg "$1" "${2-}"; PORT="$2"; shift 2;;
+    --ssh-config) need_arg "$1" "${2-}"; SSH_CONFIG="$2"; shift 2;;
     *) shift;;
   esac
 done
-[ -n "$ALIAS" ] || { printf 'usage: check-tunnel.sh --alias NAME [--port PORT]\n' >&2; exit 2; }
+[ -n "$ALIAS" ] || { printf 'usage: check-tunnel.sh --alias NAME [--port PORT] [--ssh-config FILE]\n' >&2; exit 2; }
 safe_ssh_token "$ALIAS" || { printf 'unsafe ssh alias: %s\n' "$ALIAS" >&2; exit 2; }
 [ -z "$PORT" ] || printf '%s' "$PORT" | grep -qE '^[0-9]+$' || { printf 'port must be numeric: %s\n' "$PORT" >&2; exit 2; }
 [ -z "$PORT" ] || { [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ]; } || { printf 'port out of range: %s\n' "$PORT" >&2; exit 2; }
+case "$SSH_CONFIG" in *'
+'*) printf 'ssh config path contains a newline\n' >&2; exit 2;; esac
+RH_HOME="${RH_HOME:-$HOME/.remote-harness}"
+mkdir -p "$RH_HOME/.sessions" 2>/dev/null || true
+SSH_ARGS=()
+if [ -n "$SSH_CONFIG" ]; then
+  SSH_ARGS=(-F "$SSH_CONFIG")
+else
+  SSH_ARGS=(-o "UserKnownHostsFile=$RH_HOME/.sessions/check-tunnel-known_hosts" \
+            -o GlobalKnownHostsFile=/dev/null \
+            -o StrictHostKeyChecking=accept-new \
+            -o ControlMaster=no -o ControlPath=none)
+fi
 
 # Derive the port from ssh -G if not supplied.
 if [ -z "$PORT" ]; then
-  PORT=$(ssh -G "$ALIAS" 2>/dev/null | awk '$1=="port"{print $2}')
+  PORT=$(ssh "${SSH_ARGS[@]}" -G "$ALIAS" 2>/dev/null | awk '$1=="port"{print $2}')
 fi
 emit ALIAS "$ALIAS"
 emit PORT "${PORT:-}"
@@ -56,9 +71,9 @@ fi
 
 # Try an actual login through the tunnel. Use `timeout` only if present (absent on stock macOS);
 # ssh's own ConnectTimeout + ServerAlive bound the call either way.
-err="$(mktemp "${TMPDIR:-/tmp}/rh-check-tunnel.XXXXXX")"
+err="$(mktemp "$RH_HOME/.sessions/rh-check-tunnel.XXXXXX" 2>/dev/null)" || err="$RH_HOME/.sessions/rh-check-tunnel.$$"
 TO=""; command -v timeout >/dev/null 2>&1 && TO="timeout 20"
-out=$($TO ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$ALIAS" \
+out=$($TO ssh "${SSH_ARGS[@]}" -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$ALIAS" \
         'printf "RH_OK %s %s" "$(hostname 2>/dev/null)" "$(id -un 2>/dev/null)"' 2>"$err") || true
 if printf '%s' "$out" | grep -q '^RH_OK'; then
   emit SSH up
