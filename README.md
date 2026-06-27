@@ -1,7 +1,7 @@
 <h1 align="center">remote-harness</h1>
 
 <p align="center">
-  <b>把「运行 Agent 的机器」和「存放代码的机器」连起来——两个方向都行,一条命令搞定。</b><br>
+  <b>把「运行 Agent 的机器」和「存放代码的机器」连起来——两个方向都行，一条命令搞定。</b><br>
   <i>Connect the machine your coding agent runs on with the machine your code lives on — either direction, one command.</i>
 </p>
 
@@ -19,7 +19,7 @@
 
 ---
 
-> **服务器 SSH/SSHFS 长连接提醒 / Server tuning note:** 如果一台远程开发服务器承载多用户、
+> **服务器 SSH/SSHFS 长连接提醒 / Server tuning note：** 如果一台远程开发服务器承载多用户、
 > 多个长期 Agent 会话或大量 SSHFS 挂载，建议先优化 `sshd` 容量、keepalive、文件描述符和 TCP 队列。
 > 参考 [`docs/ssh-sshfs-long-lived-connections.cn.md`](docs/ssh-sshfs-long-lived-connections.cn.md)
 > / [`docs/ssh-sshfs-long-lived-connections.md`](docs/ssh-sshfs-long-lived-connections.md)。
@@ -30,7 +30,7 @@
 ### 目录
 
 - [这是什么](#这是什么)
-- [工作原理(两个方向)](#工作原理两个方向)
+- [工作原理（两个方向）](#工作原理两个方向)
 - [服务器 SSH/SSHFS 长连接优化提醒](#服务器-sshsshfs-长连接优化提醒)
 - [安装](#安装)
 - [使用](#使用)
@@ -41,27 +41,27 @@
 
 ### 这是什么
 
-你的**编码 Agent**(Claude Code / Codex / opencode)和你的**代码库**经常不在同一台机器上。
-`remote-harness` 把两者连起来:用 sshfs 把代码挂到 Agent 所在机器的一个空目录,注入一条规则让
-**编译/测试在「代码所在的那台机器」上跑**,然后在挂载目录里启动 Agent。Claude Code/opencode 通过
-`/remote-harness` 触发;Codex 用 `$remote-harness` 直接调用技能。默认 simple reverse 模式下，Agent
+你的**编码 Agent**（Claude Code / Codex / opencode）和你的**代码库**经常不在同一台机器上。
+`remote-harness` 把两者连起来：用 sshfs 把代码挂到 Agent 所在机器的一个空目录，注入一条规则让
+**编译/测试在「代码所在的那台机器」上跑**，然后在挂载目录里启动 Agent。Claude Code/opencode 通过
+`/remote-harness` 触发；Codex 用 `$remote-harness` 直接调用技能。默认 simple reverse 模式下，Agent
 只给你一条命令；具体 SSH、路径、命名空间和挂载点都在你的本地终端里输入，不进入 Agent 聊天。
 
-记号:**A** = 运行 Agent 的机器;**P** = 存放代码的机器(用一个 ssh `<别名>` 指代)。
+记号：**A** = 运行 Agent 的机器；**P** = 存放代码的机器（用一个 ssh `<别名>` 指代）。
 
-### 工作原理(两个方向)
+### 工作原理（两个方向）
 
 默认使用 simple reverse：Agent 在远端盒子，代码在你的笔记本。当你明确要求本地 Codex/Agent 开发服务器项目时，使用 simple forward。`reference/` 记录当前 simple 流程和脚本契约。
 
-**① 反向(reverse)— Agent 在远程盒子,代码在你的笔记本(NAT 后)**
+**① 反向（reverse）— Agent 在远程盒子，代码在你的笔记本（NAT 后）**
 
-盒子无法主动连笔记本,所以笔记本开一条**反向 SSH 隧道**,再把笔记本项目挂到盒子上。
+盒子无法主动连笔记本，所以笔记本开一条**反向 SSH 隧道**，再把笔记本项目挂到盒子上。
 
 ```
-笔记本会话级 ssh_config:  Host <会话别名>   RemoteForward <端口> 127.0.0.1:22
-        └─ 连接后,盒子的 sshd 在 127.0.0.1:<端口> 监听,转发回笔记本:22
+笔记本会话级 ssh_config：  Host <会话别名>   RemoteForward <端口> 127.0.0.1:22
+        └─ 连接后，盒子的 sshd 在 127.0.0.1:<端口> 监听，转发回笔记本:22
 
-盒子:  ssh <别名>          → 127.0.0.1:<端口> → (隧道) → 笔记本:22
+盒子：  ssh <别名>          → 127.0.0.1:<端口> → （隧道） → 笔记本:22
         sshfs <别名>:/项目  → 同一条隧道       → 笔记本文件挂载到这里
 ```
 
@@ -69,12 +69,12 @@
 配置和 `known_hosts`，并关闭 OpenSSH multiplexing。唯一的 `~/.ssh` 写入例外是反向模式可在笔记本
 `~/.ssh/authorized_keys` 中追加带标签的临时授权块，并在退出时清理。
 
-**② 正向(forward)— Agent 在本机,代码在可直连的远程服务器**
+**② 正向（forward）— Agent 在本机，代码在可直连的远程服务器**
 
-无需隧道:本机直接 ssh 到服务器,把服务器项目挂到本地空目录,Agent 在本地启动,构建经
+无需隧道：本机直接 ssh 到服务器，把服务器项目挂到本地空目录，Agent 在本地启动，构建经
 `ssh <别名>` 在服务器上执行。
 
-两个方向的不变式相同:**挂载到空目录 → 注入「在 `<别名>` 上构建」规则 → 在挂载点启动 Agent**。
+两个方向的不变式相同：**挂载到空目录 → 注入「在 `<别名>` 上构建」规则 → 在挂载点启动 Agent**。
 
 ### 服务器 SSH/SSHFS 长连接优化提醒
 
@@ -96,33 +96,33 @@ remote-harness 的单次会话会自动做这些事：使用会话级 SSH config
 
 ```bash
 ./manage.sh            # 复制安装到 ~/.remote-harness + 各 Agent 的入口
-./manage.sh --dev      # 开发模式:软链到本仓库,改动即时生效
-./manage.sh --uninstall [claude|codex|opencode]   # 卸载(不动你的 ssh 配置/挂载)
+./manage.sh --dev      # 开发模式：软链到本仓库，改动即时生效
+./manage.sh --uninstall [claude|codex|opencode]   # 卸载（不动你的 ssh 配置/挂载）
 ```
 
 | Agent | 入口位置 | 调用 |
 |---|---|---|
-| 共享核心 | `~/.remote-harness/{SKILL.md, SKILL.cn.md, scripts/, reference/, docs/}` | (各方共用) |
+| 共享核心 | `~/.remote-harness/{SKILL.md, SKILL.cn.md, scripts/, reference/, docs/}` | （各方共用） |
 | Claude Code | `~/.claude/skills/remote-harness/SKILL.md` | `/remote-harness` |
 | Codex | `~/.codex/skills/remote-harness/SKILL.md` | `$remote-harness` |
 | opencode | `~/.config/opencode/command/remote-harness.md` | `/remote-harness` |
 
 **脚本**是唯一的单一事实来源——各 Agent 都调用 `~/.remote-harness/scripts/*`。每个 Agent 的入口
-形态不同:Claude Code 与 Codex 都是原生 *skill*(共用同一份 `SKILL.md`;Codex 无自定义斜杠命令,推荐用
-`$remote-harness` 直接调用技能),opencode 是让 Agent 去读共享 `SKILL.md` 的自定义命令。
+形态不同：Claude Code 与 Codex 都是原生 *skill*（共用同一份 `SKILL.md`；Codex 无自定义斜杠命令，推荐用
+`$remote-harness` 直接调用技能），opencode 是让 Agent 去读共享 `SKILL.md` 的自定义命令。
 
 ### 使用
 
-在你的 Agent 里启动 remote-harness:Claude Code/opencode 运行 `/remote-harness`(加 yolo:
-`/remote-harness 开启yolo模式`);Codex 输入 `$remote-harness`(加 yolo:`$remote-harness yolo模式，中文`)。
-默认 simple reverse 会:
+在你的 Agent 里启动 remote-harness：Claude Code/opencode 运行 `/remote-harness`（加 yolo：
+`/remote-harness 开启yolo模式`）；Codex 输入 `$remote-harness`（加 yolo：`$remote-harness yolo模式，中文`）。
+默认 simple reverse 会：
 
 1. 让 Agent 直接返回一条本地 bootstrap 命令。公开入口统一是 `simple-bootstrap.sh`；
    如果脚本在远端 skill 目录，命令会先从远端读取它再在本地运行。
 2. 你在笔记本终端运行该命令，并输入远端 SSH target、本地项目目录、可选远端挂载点。
 3. bootstrap 建立反向隧道，把笔记本项目挂到远端。
 4. 在远端挂载目录启动所选 Agent，并注入“构建/测试在笔记本上跑”的会话规则。
-5. 退出 Agent 时**自动卸载**。随时再次启动 remote-harness 重新连接(幂等;陈旧挂载会被检测并重挂)。
+5. 退出 Agent 时**自动卸载**。随时再次启动 remote-harness 重新连接（幂等；陈旧挂载会被检测并重挂）。
 
 如果你要让 **Codex 在本地运行、项目和开发环境在服务器上**，直接说明这个需求，例如
 `$remote-harness 中文，本地 Codex 开发服务器上的项目`。simple forward 走同一个 bootstrap 入口并传入
@@ -132,18 +132,18 @@ remote-harness 的单次会话会自动做这些事：使用会话级 SSH config
 
 ### 环境要求
 
-- 你已经能从一台机器 ssh 到另一台(任意端口 / 常见 `-J` 跳板机都行)。复杂 SSH 选项
-  (`ProxyCommand`、`-F`、带空格的引号路径、本地转发等)请先写进 `~/.ssh/config` 的 `Host` 别名，再把别名交给 remote-harness。
-- **反向 simple**:你已经把笔记本的 SSH 公钥配置到远端服务器账号,所以本地命令能先登录远端抓取脚本。
+- 你已经能从一台机器 ssh 到另一台（任意端口 / 常见 `-J` 跳板机都行）。复杂 SSH 选项
+  （`ProxyCommand`、`-F`、带空格的引号路径、本地转发等）请先写进 `~/.ssh/config` 的 `Host` 别名，再把别名交给 remote-harness。
+- **反向 simple**：你已经把笔记本的 SSH 公钥配置到远端服务器账号，所以本地命令能先登录远端抓取脚本。
   远端会在自己的 `~/.remote-harness/keys` 下生成/复用 remote-harness key；本地脚本可将其公钥作为
   `remote-harness:reverse-auth:<tag>` 临时块写入笔记本 `~/.ssh/authorized_keys`，限制为回环来源并在退出时清理。
-  盒子的 sshd 需要允许 TCP 转发(默认即可)。
-- **挂载发生的那台机器需要 `sshfs` + FUSE**——反向是盒子、正向是本机:
-  - Linux/WSL:`sudo apt-get install -y sshfs`(FUSE 通常已就绪;脚本会按发行版给正确命令)。
-  - **macOS:用 FUSE-T——无内核扩展、无需降低系统安全级**:
+  盒子的 sshd 需要允许 TCP 转发（默认即可）。
+- **挂载发生的那台机器需要 `sshfs` + FUSE**——反向是盒子、正向是本机：
+  - Linux/WSL：`sudo apt-get install -y sshfs`（FUSE 通常已就绪；脚本会按发行版给正确命令）。
+  - **macOS：用 FUSE-T——无内核扩展、无需降低系统安全级**：
     `brew install macos-fuse-t/homebrew-cask/fuse-t && brew install macos-fuse-t/homebrew-cask/sshfs-fuse-t`。
-    **不要用 macFUSE**(它要求降低安全策略)。FUSE-T 保留 sshfs 的同步写,编辑会先落到代码所在机器
-    再触发远端构建。(无内核扩展的兜底:`rclone nfsmount`——但写是异步的,故本场景优先 FUSE-T。)
+    **不要用 macFUSE**（它要求降低安全策略）。FUSE-T 保留 sshfs 的同步写，编辑会先落到代码所在机器
+    再触发远端构建。（无内核扩展的兜底：`rclone nfsmount`——但写是异步的，故本场景优先 FUSE-T。）
 - 多用户共享远程开发服务器建议按
   [`docs/ssh-sshfs-long-lived-connections.cn.md`](docs/ssh-sshfs-long-lived-connections.cn.md)
   调整 sshd 容量、keepalive、`nofile` 和 TCP 队列。该优化不是 remote-harness 的硬性前置条件，
@@ -153,34 +153,34 @@ remote-harness 的单次会话会自动做这些事：使用会话级 SSH config
 
 ```
 remote-harness/
-├── SKILL.md                  # simple reverse / simple forward 入口:只输出本地 bootstrap 命令
+├── SKILL.md                  # simple reverse / simple forward 入口：只输出本地 bootstrap 命令
 ├── reference/
-│   ├── reverse.md            # 反向完整流程(建隧道 → 发命令)
-│   ├── forward.md            # 正向完整流程(选服务器/目录 → 发命令)
+│   ├── reverse.md            # 反向完整流程（建隧道 → 发命令）
+│   ├── forward.md            # 正向完整流程（选服务器 / 目录 → 发命令）
 │   └── scripts.md            # 各脚本的 KEY=VALUE 契约
-├── scripts/                  # 确定性逻辑(KEY=VALUE 输出),Agent 无关
-│   ├── _common.sh            # 共享库(颜色/ask/sq/parse_via/写托管别名/OS 变量)
+├── scripts/                  # 确定性逻辑（KEY=VALUE 输出），Agent 无关
+│   ├── _common.sh            # 共享库（颜色/ask/sq/parse_via/写托管别名/OS 变量）
 │   ├── simple-bootstrap.sh   # simple 统一入口（本地运行；可从远端读取）
 │   ├── simple-dispatch.sh    # 本地选择/分发 reverse/forward
 │   ├── simple-laptop-setup.sh simple-local-setup.sh  # 分模式本地向导
-│   ├── suggest-via.sh        # simple 反向:远端 SSH target 默认值
-│   ├── setup-tunnel.sh check-tunnel.sh   # 反向隧道的会话级别名/检查
+│   ├── suggest-via.sh        # simple 反向：远端 SSH target 默认值
+│   ├── setup-tunnel.sh check-tunnel.sh   # 反向隧道的会话级别名 / 检查
 │   ├── mount-project.sh inject-rule.sh   # 两向复用的挂载与规则注入
-│   ├── laptop-setup.sh       # 反向编排(在笔记本上跑)
-│   └── local-setup.sh        # 正向编排(在本机上跑)
-├── adapters/{codex,opencode}.md   # 各 Agent 的入口(只设置 --launch)
+│   ├── laptop-setup.sh       # 反向编排（在笔记本上跑）
+│   └── local-setup.sh        # 正向编排（在本机上跑）
+├── adapters/{codex,opencode}.md   # 各 Agent 的入口（只设置 --launch）
 ├── manage.sh                 # 安装 / --dev / --uninstall
-├── docs/                     # 设计与完整流程文档(安装时一并复制/软链)
+├── docs/                     # 设计与完整流程文档（安装时一并复制/软链）
 │   └── ssh-sshfs-long-lived-connections*.md  # 共享服务器 SSH/SSHFS 长连接优化
-├── issues/issue1.md          # 共享账号命名空间隔离分析(+ .cn.md)
-├── AGENTS.md (+ CLAUDE.md 软链)    # 给「开发本仓库」的 Agent 的指南
+├── issues/issue1.md          # 共享账号命名空间隔离分析（+ .cn.md）
+├── AGENTS.md（+ CLAUDE.md 软链）   # 给「开发本仓库」的 Agent 的指南
 └── README.md
 ```
 
-> **设计文档**:想了解整体架构、四层结构与设计决策,见 [`docs/design.md`](docs/design.md)(中文版
-> [`docs/design.cn.md`](docs/design.cn.md))。
+> **设计文档**：想了解整体架构、四层结构与设计决策，见 [`docs/design.md`](docs/design.md)（中文版
+> [`docs/design.cn.md`](docs/design.cn.md)）。
 >
-> **文档约定**:除 `README.md`(本文,内联双语)外,所有 `*.md` 都配一份中文 `*.cn.md`。详见 `AGENTS.md`。
+> **文档约定**：除 `README.md`（本文，内联双语）外，所有 `*.md` 都配一份中文 `*.cn.md`。详见 `AGENTS.md`。
 
 ### 安全与隐私
 
@@ -190,22 +190,22 @@ remote-harness/
 - 反向模式的唯一 `~/.ssh` 写入例外是本机 `authorized_keys`：脚本会先检查是否已有匹配有效 key；
   没有时才追加带 `remote-harness:reverse-auth:<tag>` 标签、`from="127.0.0.1,::1"` 限制的临时块。
   托管块通过 `~/.remote-harness/.sessions/authorized-keys/...` 引用计数，最后一个会话退出时删除。
-- 反向隧道用 `RemoteForward <端口> 127.0.0.1:22`(仅回环);多用户盒子上同机其他用户能到达该端口,
+- 反向隧道用 `RemoteForward <端口> 127.0.0.1:22`（仅回环）；多用户盒子上同机其他用户能到达该端口，
   但没有你的私钥无法认证。
 - 多人共用同一个服务器账号时，simple reverse 默认使用会话别名 `rlocal`，别名和 known_hosts 都放在
   远端会话目录中；不会覆盖共享账号的 `~/.ssh/config`。同一台笔记本的多项目会话仍可复用活动隧道，
   最后一个会话退出时清理。
-- `--yolo` 会绕过审批,**仅在你明确要求时**才启用;opencode 的 `permission:allow` 只写进**本次会话**
-  的配置,退出即清。
-- 注入的规则是**会话级**的(不写全局文件、不碰挂载的仓库);退出删除会话目录。
+- `--yolo` 会绕过审批，**仅在你明确要求时**才启用；opencode 的 `permission:allow` 只写进**本次会话**
+  的配置，退出即清。
+- 注入的规则是**会话级**的（不写全局文件、不碰挂载的仓库）；退出删除会话目录。
 
 ### 故障排查
 
-详见 `reference/reverse.md` / `reference/forward.md` 末尾。常见:
-- macOS 提示要 macFUSE → 改用 FUSE-T(见[环境要求](#环境要求))。
-- 会话中文件突然读不了(`Transport endpoint is not connected`)→ 隧道断了,退出 Agent 后再次启动
-  remote-harness,会自动检测陈旧挂载并重挂。
-- 挂载报 `not-empty` → 换一个空目录(脚本会提示)。
+详见 `reference/reverse.md` / `reference/forward.md` 末尾。常见：
+- macOS 提示要 macFUSE → 改用 FUSE-T（见[环境要求](#环境要求)）。
+- 会话中文件突然读不了（`Transport endpoint is not connected`）→ 隧道断了，退出 Agent 后再次启动
+  remote-harness，会自动检测陈旧挂载并重挂。
+- 挂载报 `not-empty` → 换一个空目录（脚本会提示）。
 
 ---
 
