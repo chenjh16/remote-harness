@@ -73,3 +73,5 @@ source SSH target 只用于读取 remote-harness 脚本。forward 模式仍会�
 - `not-empty`：选择另一个空的本地挂载点。
 - macOS sshfs：使用 FUSE-T，不使用 macFUSE；`mount-project.sh` 会给出安装提示。
 - 编辑后立刻执行远端命令失败：可能是挂载尚未刷新，重跑一次；不要在本地运行构建/安装工具。
+- 高负载下频繁断连：优化服务器 sshd 容量、keepalive、`nofile` 和 TCP 队列；见
+  `docs/ssh-sshfs-long-lived-connections.cn.md`。

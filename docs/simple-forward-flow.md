@@ -70,6 +70,8 @@ server target.
 - The local machine has `sshfs`; `mount-project.sh` surfaces an OS-aware install command when it is
   missing.
 - The selected agent CLI is installed locally.
+- For shared project servers or many long-lived SSHFS mounts, tune server-side sshd capacity,
+  keepalive, `nofile`, and TCP queues as described in `docs/ssh-sshfs-long-lived-connections.md`.
 
 ## Failure And Recovery
 

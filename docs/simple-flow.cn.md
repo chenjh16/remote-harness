@@ -13,7 +13,7 @@ simple forward。若请求模糊，则输出不带 `--mode` 的 `simple-bootstra
 
 ## 参考 CodexMonitor 的流程抽象
 
-`/Users/substance/vibe/remote-harness-gui/ref/CodexMonitor` 的二开实现把 Remote Harness 的关键边界放得很清楚：
+remote-harness-gui 的 CodexMonitor 二开实现把 Remote Harness 的关键边界放得很清楚：
 
 - `src/features/workspaces/components/AddWorkspacePrompt.tsx` 在本地 UI 收集 SSH target、本地目录、远端挂载路径、Agent 启动参数等。
 - `src/services/tauri.ts` 和 `src-tauri/src/workspaces/commands.rs` 负责 SSH 检查、目录选择、挂载远端 home 等本地侧动作。
@@ -114,6 +114,8 @@ ssh -n -o ClearAllForwardings=yes \
 - 本地机器可运行 SSH server；脚本会检测并在可行时提示开启。
 - 远端机器有 `sshfs` 和 FUSE；缺失时 `laptop-setup.sh` 会给出安装命令并允许重试。
 - 远端机器已经安装要启动的 Agent CLI：`codex`、`claude` 或 `opencode`。
+- 多用户共享远端机器或大量长期 SSHFS 挂载场景，建议按
+  `docs/ssh-sshfs-long-lived-connections.cn.md` 优化 sshd 容量、keepalive、`nofile` 和 TCP 队列。
 
 ## 失败与恢复
 

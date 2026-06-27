@@ -13,6 +13,9 @@ is for agents *developing* remote-harness itself.
   it must not ask the agent to collect SSH targets, paths, ports, or namespaces.
 - `reference/{reverse,forward,scripts}.md` — current simple reverse/forward behavior and
   helper-script contracts.
+- `docs/{design,complete-flow,simple-flow,simple-forward-flow,ssh-sshfs-long-lived-connections}.md`
+  — design, complete flow, per-mode plans, and shared-server SSH/SSHFS long-lived connection tuning.
+  Keep each one synchronized with its `.cn.md` counterpart.
 - `scripts/*.sh` — the deterministic helpers (KEY=VALUE on stdout, notes on stderr). `_common.sh` is
   a sourced library (not an entry point). `simple-bootstrap.sh` is the public unified simple entry
   point; it can run from a local install or be fetched from a remote skill install. It delegates to
@@ -89,6 +92,10 @@ uses direct ssh. Both mount P's project onto an empty dir on A, inject "build on
 - Apart from that explicit reverse-auth exception, SSH authentication remains user-owned. The simple
   flow may read existing user SSH config/keys/agent behavior, but it must not install keys or
   silently create credentials.
+- Session-local keepalive, `sshfs reconnect`, and temp SSH config do not replace server capacity
+  tuning. For shared remote boxes or many long-lived SSHFS mounts, docs and user-facing reminders
+  should point to `docs/ssh-sshfs-long-lived-connections*.md` so server operators tune sshd,
+  `nofile`, and TCP queues.
 - The launched agent should see short commands such as `ssh rlocal 'cd ... && <command>'`. Hide the
   temp ssh config behind the session-local `bin/ssh` wrapper that is prepended to the launched
   agent's `PATH`; do not expose `ssh -F <temp-config> ...` in the injected rule.

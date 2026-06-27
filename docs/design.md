@@ -73,7 +73,19 @@ ports in chat. The local terminal wizard collects them. For simple reverse, the 
 remote SSH target using server-side facts only. If it uses `SSH_CONNECTION`, only fields 3 and 4
 (`server-ip`, `server-port`) are allowed; fields 1 and 2 are local/client data.
 
-## 6. Rule Injection
+## 6. Shared-Server Capacity
+
+The simple flows already use client-side mitigations: session-local SSH config, temporary
+`known_hosts`, `sshfs reconnect`, keepalive options, and exit cleanup. Those choices do not replace
+server-side capacity tuning. On shared remote development boxes, many long-running agent sessions or
+many SSHFS mounts should be backed by the `sshd` `MaxStartups` / `MaxSessions` / `ClientAlive*`,
+systemd/PAM `nofile`, and TCP queue guidance in
+[`ssh-sshfs-long-lived-connections.md`](ssh-sshfs-long-lived-connections.md).
+
+This is not a hard prerequisite for one small session; it is an operational requirement for stable
+shared-server use.
+
+## 7. Rule Injection
 
 `inject-rule.sh` is session-scoped and direction-neutral. It writes under
 `$RH_HOME/.sessions/<key>` and never writes the mounted repository. It tells the launched agent:
@@ -90,7 +102,7 @@ Agent-specific channels:
   and writable roots for the relevant `~/.remote-harness/.sessions/...` dirs so SSH can write its
   temporary `known_hosts` there without touching `~/.ssh`.
 
-## 7. Invariants
+## 8. Invariants
 
 1. `simple-bootstrap.sh` is the only public simple entry.
 2. Keep emitted commands compact but copyable: a few short lines, no long single-line shell blobs.

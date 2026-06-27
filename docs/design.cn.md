@@ -68,7 +68,17 @@ Agent 返回命令，不在聊天中收集具体 SSH target、本地路径、挂
 simple reverse 中，Agent 可以只基于服务器侧事实给出远端 SSH target 默认建议值。若使用
 `SSH_CONNECTION`，只能使用第 3/4 字段（`server-ip`、`server-port`）；第 1/2 字段是本地客户端数据。
 
-## 6. 规则注入
+## 6. 共享服务器容量
+
+remote-harness 的 simple 流程会在客户端侧使用会话级 SSH config、临时 `known_hosts`、
+`sshfs reconnect`、keepalive 和退出清理，但这些不能替代服务器端容量配置。多人共享远程开发盒子、
+大量长期 Agent 会话或大量 SSHFS 挂载时，运维侧应按
+[`ssh-sshfs-long-lived-connections.cn.md`](ssh-sshfs-long-lived-connections.cn.md) 评估
+`sshd` 的 `MaxStartups` / `MaxSessions` / `ClientAlive*`、systemd/PAM `nofile` 和 TCP 队列。
+
+该优化不是单个小会话的硬性前置条件；它是共享服务器长期稳定性的运行环境要求。
+
+## 7. 规则注入
 
 `inject-rule.sh` 是会话级且方向无关。它写入 `$RH_HOME/.sessions/<key>`，永不写入被挂载仓库。规则告诉 Agent：
 
@@ -84,7 +94,7 @@ simple reverse 中，Agent 可以只基于服务器侧事实给出远端 SSH tar
   `~/.remote-harness/.sessions/...` 目录加入 writable roots，让 SSH 把临时 `known_hosts` 和
   运行时文件写在那里，而不触碰 `~/.ssh`。
 
-## 7. 不变量
+## 8. 不变量
 
 1. `simple-bootstrap.sh` 是唯一公开 simple 入口。
 2. 输出命令必须紧凑但可复制：少量短行，不输出超长单行 shell 块。

@@ -79,3 +79,5 @@ project server SSH target.
 - macOS sshfs: use FUSE-T, not macFUSE. The install hint is surfaced by `mount-project.sh`.
 - Remote command fails immediately after an edit: re-run once in case the mount had not flushed yet;
   do not run build/install tools locally.
+- Frequent disconnects under load: tune the server's sshd capacity, keepalive, `nofile`, and TCP
+  queues; see `docs/ssh-sshfs-long-lived-connections.md`.

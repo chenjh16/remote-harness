@@ -19,12 +19,19 @@
 
 ---
 
+> **服务器 SSH/SSHFS 长连接提醒 / Server tuning note:** 如果一台远程开发服务器承载多用户、
+> 多个长期 Agent 会话或大量 SSHFS 挂载，建议先优化 `sshd` 容量、keepalive、文件描述符和 TCP 队列。
+> 参考 [`docs/ssh-sshfs-long-lived-connections.cn.md`](docs/ssh-sshfs-long-lived-connections.cn.md)
+> / [`docs/ssh-sshfs-long-lived-connections.md`](docs/ssh-sshfs-long-lived-connections.md)。
+> remote-harness 自身会使用会话级 SSH config、`sshfs reconnect` 和 keepalive，但服务器端容量仍会影响长期稳定性。
+
 ## 中文
 
 ### 目录
 
 - [这是什么](#这是什么)
 - [工作原理(两个方向)](#工作原理两个方向)
+- [服务器 SSH/SSHFS 长连接优化提醒](#服务器-sshsshfs-长连接优化提醒)
 - [安装](#安装)
 - [使用](#使用)
 - [环境要求](#环境要求)
@@ -68,6 +75,22 @@
 `ssh <别名>` 在服务器上执行。
 
 两个方向的不变式相同:**挂载到空目录 → 注入「在 `<别名>` 上构建」规则 → 在挂载点启动 Agent**。
+
+### 服务器 SSH/SSHFS 长连接优化提醒
+
+remote-harness 的单次会话会自动做这些事：使用会话级 SSH config；把临时 `known_hosts` 放在
+`~/.remote-harness/.sessions/...`；关闭 OpenSSH multiplexing；给 `sshfs` 加 `reconnect` 和 keepalive；
+并在退出时尽量清理挂载、规则和临时配置。
+
+但如果远程服务器是多人共享开发盒子，服务器端仍需要足够的 SSH 容量。建议运维侧评估：
+
+- `MaxStartups` / `MaxSessions`，避免突发 SSHFS 挂载时握手阶段被拒。
+- `ClientAliveInterval` / `ClientAliveCountMax` / `TCPKeepAlive`，让长期连接更稳并回收半死会话。
+- `ssh.service` 与 PAM 的 `nofile`，避免多用户 SFTP/SSHFS 先撞到文件描述符上限。
+- `somaxconn`、`tcp_max_syn_backlog` 和 TCP keepalive sysctl，应对连接突发和长期 idle 连接。
+
+完整配置模板、验证命令和回滚方法见
+[`docs/ssh-sshfs-long-lived-connections.cn.md`](docs/ssh-sshfs-long-lived-connections.cn.md)。
 
 ### 安装
 
@@ -121,6 +144,10 @@
     `brew install macos-fuse-t/homebrew-cask/fuse-t && brew install macos-fuse-t/homebrew-cask/sshfs-fuse-t`。
     **不要用 macFUSE**(它要求降低安全策略)。FUSE-T 保留 sshfs 的同步写,编辑会先落到代码所在机器
     再触发远端构建。(无内核扩展的兜底:`rclone nfsmount`——但写是异步的,故本场景优先 FUSE-T。)
+- 多用户共享远程开发服务器建议按
+  [`docs/ssh-sshfs-long-lived-connections.cn.md`](docs/ssh-sshfs-long-lived-connections.cn.md)
+  调整 sshd 容量、keepalive、`nofile` 和 TCP 队列。该优化不是 remote-harness 的硬性前置条件，
+  但会显著提升大量长期 SSH/SSHFS 会话的稳定性。
 
 ### 仓库结构
 
@@ -144,6 +171,7 @@ remote-harness/
 ├── adapters/{codex,opencode}.md   # 各 Agent 的入口(只设置 --launch)
 ├── manage.sh                 # 安装 / --dev / --uninstall
 ├── docs/                     # 设计与完整流程文档(安装时一并复制/软链)
+│   └── ssh-sshfs-long-lived-connections*.md  # 共享服务器 SSH/SSHFS 长连接优化
 ├── issues/issue1.md          # 共享账号命名空间隔离分析(+ .cn.md)
 ├── AGENTS.md (+ CLAUDE.md 软链)    # 给「开发本仓库」的 Agent 的指南
 └── README.md
@@ -187,6 +215,7 @@ remote-harness/
 
 - [What it is](#what-it-is)
 - [How it works (two directions)](#how-it-works-two-directions)
+- [Server SSH/SSHFS Long-Lived Connection Tuning](#server-sshsshfs-long-lived-connection-tuning)
 - [Install](#install)
 - [Usage](#usage)
 - [Requirements](#requirements)
@@ -231,6 +260,23 @@ builds run on the server via `ssh <alias>`.
 
 Both share the invariant: **mount onto an empty dir → inject "build on `<alias>`" → launch the agent
 in the mount.**
+
+### Server SSH/SSHFS Long-Lived Connection Tuning
+
+Each remote-harness session already uses session-local SSH config, keeps temporary `known_hosts`
+under `~/.remote-harness/.sessions/...`, disables OpenSSH multiplexing, passes `reconnect` and
+keepalive options to `sshfs`, and cleans up mounts/rules/temp configs on exit where possible.
+
+For shared remote development servers, server-side capacity still matters. Operators should review:
+
+- `MaxStartups` / `MaxSessions`, so bursty SSHFS mounts are not rejected during authentication.
+- `ClientAliveInterval` / `ClientAliveCountMax` / `TCPKeepAlive`, so long sessions survive short
+  network blips and dead sessions are reclaimed.
+- `ssh.service` and PAM `nofile`, so SFTP/SSHFS workloads do not hit low file descriptor limits.
+- `somaxconn`, `tcp_max_syn_backlog`, and TCP keepalive sysctls for connection bursts and idle flows.
+
+See the full template, verification commands, and rollback notes in
+[`docs/ssh-sshfs-long-lived-connections.md`](docs/ssh-sshfs-long-lived-connections.md).
 
 ### Install
 
@@ -295,6 +341,10 @@ the last choice.
     Avoid macFUSE (it requires lowering security). FUSE-T keeps sshfs's synchronous writes, so edits
     land on the host before remote builds. (Kext-less fallback: `rclone nfsmount`, but its writes are
     async — prefer FUSE-T for this edit-here/build-on-host workflow.)
+- Shared remote development servers should use
+  [`docs/ssh-sshfs-long-lived-connections.md`](docs/ssh-sshfs-long-lived-connections.md) to tune sshd
+  capacity, keepalive, `nofile`, and TCP queues. This is not a hard prerequisite for remote-harness,
+  but it materially improves stability with many long-lived SSH/SSHFS sessions.
 
 ### Repo layout
 
@@ -315,6 +365,7 @@ remote-harness/
 ├── adapters/{codex,opencode}.md
 ├── manage.sh
 ├── docs/                            # design and complete-flow docs (installed with the skill)
+│   └── ssh-sshfs-long-lived-connections*.md  # shared-server SSH/SSHFS tuning
 ├── issues/issue1.md                 # shared-account namespacing analysis (+ .cn.md)
 ├── AGENTS.md (+ CLAUDE.md symlink)   # guide for agents developing this repo
 └── README.md

@@ -211,6 +211,9 @@ is hidden from the launched agent with the same session `ssh` wrapper pattern.
   it when needed.
 - Simple forward: the local machine can SSH into the server and has `sshfs`; the script guides
   installing sshfs when needed.
+- Shared remote servers with many users or long-lived SSHFS mounts should tune sshd capacity,
+  keepalive, file descriptor limits, and TCP queues. This is operationally recommended, not required
+  for a single small session; see `docs/ssh-sshfs-long-lived-connections.md`.
 
 ## More Detail
 
@@ -223,3 +226,5 @@ The feasibility analysis and implementation plan live in:
 - `docs/simple-flow.cn.md`
 - `docs/simple-forward-flow.md`
 - `docs/simple-forward-flow.cn.md`
+- `docs/ssh-sshfs-long-lived-connections.md`
+- `docs/ssh-sshfs-long-lived-connections.cn.md`

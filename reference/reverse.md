@@ -84,6 +84,8 @@ ssh -n -o ClearAllForwardings=yes \
 - remote-harness is installed on the remote box at `~/.remote-harness`, or `RH_HOME` points to it.
 - The laptop can run an SSH server; the wizard detects and guides enabling it when possible.
 - The remote box has `sshfs` and the selected agent CLI (`codex`, `claude`, or `opencode`).
+- For shared remote boxes with many users or long-lived SSHFS mounts, tune server-side sshd capacity
+  and keepalive as described in `docs/ssh-sshfs-long-lived-connections.md`.
 
 ## Troubleshooting
 
@@ -95,3 +97,5 @@ ssh -n -o ClearAllForwardings=yes \
   port when the listener does not reach this laptop.
 - Stale mount: exit the agent and rerun remote-harness; stale sshfs mounts are revalidated and
   replaced.
+- Frequent disconnects under load: check server-side `MaxStartups`, `ClientAlive*`, `nofile`, and
+  TCP queue settings; see `docs/ssh-sshfs-long-lived-connections.md`.

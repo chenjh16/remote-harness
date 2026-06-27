@@ -302,6 +302,13 @@ Forward：
 3. 删除本地会话 ssh config。
 4. 默认挂载点若为空则删除。
 
+## 长期稳定性
+
+remote-harness 的会话级 SSH config、临时 `known_hosts`、`sshfs reconnect` 和 keepalive 能提升单次会话稳定性，
+但多用户共享远端盒子或大量长期 SSHFS 挂载仍需要服务器端容量配合。建议按
+[`ssh-sshfs-long-lived-connections.cn.md`](ssh-sshfs-long-lived-connections.cn.md) 检查 `sshd`
+的 `MaxStartups` / `MaxSessions` / `ClientAlive*`、systemd/PAM `nofile` 和 TCP 队列。
+
 ## 一句话总结
 
 - Reverse：**远端 Codex 看见一个远端挂载目录；真正项目和工具链在笔记本，命令走 `ssh rlocal` 回笔记本。**

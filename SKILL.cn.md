@@ -188,6 +188,8 @@ forward setup 始终使用本地 `~/.remote-harness/.sessions/.../ssh_config` �
 - Simple reverse：远端有 `sshfs` 和要启动的 Agent CLI。
 - Simple reverse：笔记本可以运行 SSH server；必要时 `laptop-setup.sh` 会检测并提示开启。
 - Simple forward：本地机器可以 SSH 登录服务器，并且本地有 `sshfs`；缺失时脚本会提示安装。
+- 多用户共享远端服务器或存在大量长期 SSHFS 挂载时，建议优化 sshd 容量、keepalive、文件描述符和
+  TCP 队列。这不是单个小会话的硬性前置条件；详见 `docs/ssh-sshfs-long-lived-connections.cn.md`。
 
 ## 更多细节
 
@@ -200,3 +202,5 @@ forward setup 始终使用本地 `~/.remote-harness/.sessions/.../ssh_config` �
 - `docs/simple-flow.cn.md`
 - `docs/simple-forward-flow.md`
 - `docs/simple-forward-flow.cn.md`
+- `docs/ssh-sshfs-long-lived-connections.md`
+- `docs/ssh-sshfs-long-lived-connections.cn.md`

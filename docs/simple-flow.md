@@ -20,8 +20,7 @@ reverse.
 
 ## CodexMonitor Reference
 
-The fork under `/Users/substance/vibe/remote-harness-gui/ref/CodexMonitor` models the boundary this
-shell flow should keep:
+The CodexMonitor fork in remote-harness-gui models the boundary this shell flow should keep:
 
 - `AddWorkspacePrompt.tsx` collects SSH target, local folder, remote mount path, and launch options
   in local UI.
@@ -109,6 +108,8 @@ on readable continuation lines.
 - The laptop can run an SSH server.
 - The remote box has `sshfs` and FUSE available.
 - The remote box has the selected agent CLI installed: `codex`, `claude`, or `opencode`.
+- For shared remote boxes or many long-lived SSHFS mounts, tune sshd capacity, keepalive, `nofile`,
+  and TCP queues as described in `docs/ssh-sshfs-long-lived-connections.md`.
 
 ## Implemented
 

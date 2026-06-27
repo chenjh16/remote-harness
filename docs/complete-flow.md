@@ -127,3 +127,11 @@ reference count reaches zero, and removes the local temp SSH config.
 
 Forward cleanup unmounts local sshfs, removes the local rule, removes the session SSH config, and
 removes the default empty mountpoint when possible.
+
+## Long-Running Stability
+
+Session-local SSH config, temporary `known_hosts`, `sshfs reconnect`, and keepalive options improve
+one-session reliability, but shared remote boxes and many long-lived SSHFS mounts still need
+server-side capacity. Use [`ssh-sshfs-long-lived-connections.md`](ssh-sshfs-long-lived-connections.md)
+to review `sshd` `MaxStartups` / `MaxSessions` / `ClientAlive*`, systemd/PAM `nofile`, and TCP
+queues.

@@ -78,6 +78,8 @@ ssh -n -o ClearAllForwardings=yes \
 - 远端盒子已安装 remote-harness，默认在 `~/.remote-harness`，或设置了 `RH_HOME`。
 - 笔记本可以运行 SSH server；向导会在可行时检测并提示开启。
 - 远端盒子已安装 `sshfs` 和选定 Agent CLI（`codex`、`claude` 或 `opencode`）。
+- 多用户共享远端盒子或存在大量长期 SSHFS 挂载时，建议按
+  `docs/ssh-sshfs-long-lived-connections.cn.md` 优化服务端 sshd 容量和 keepalive。
 
 ## 故障排查
 
@@ -87,3 +89,5 @@ ssh -n -o ClearAllForwardings=yes \
   `laptop-setup.sh`。
 - 端口已监听：`laptop-setup.sh` 会校验归属；若监听者不是本机，会切换到附近空闲端口。
 - 陈旧挂载：退出 Agent 后重新运行 remote-harness；脚本会重新校验并替换失效 sshfs 挂载。
+- 高负载下频繁断连：检查服务端 `MaxStartups`、`ClientAlive*`、`nofile` 和 TCP 队列设置；
+  见 `docs/ssh-sshfs-long-lived-connections.cn.md`。

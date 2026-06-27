@@ -862,6 +862,26 @@ ssh server-dev 'cd /srv/app && pytest'</code></div>
     <section class="section">
       <div class="section-head">
         <div>
+          <h2>长期稳定性提醒</h2>
+          <p>会话级配置让单次连接更稳；共享服务器还需要服务端容量配合。</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <span class="tag amber">Server tuning</span>
+        <h3>多用户与长期 SSHFS 挂载</h3>
+        <p>
+          remote-harness 会使用临时 SSH config、临时 known_hosts、sshfs reconnect 和 keepalive。
+          如果一台远端开发服务器承载多个用户或大量长期挂载，还应检查 sshd 的 MaxStartups、MaxSessions、
+          ClientAlive，systemd/PAM nofile 和 TCP 队列。
+          详见 <a href="ssh-sshfs-long-lived-connections.cn.md">ssh-sshfs-long-lived-connections.cn.md</a>。
+        </p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <div>
           <h2>最终心智模型</h2>
           <p>记住这两句话，基本就不会把方向搞混。</p>
         </div>

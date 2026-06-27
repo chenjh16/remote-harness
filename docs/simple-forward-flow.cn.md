@@ -56,6 +56,8 @@ RH_LANG=zh bash "${RH_HOME:-$HOME/.remote-harness}/scripts/simple-bootstrap.sh" 
 - 本地机器可以 SSH 登录服务器。
 - 本地有 `sshfs`；缺失时 `mount-project.sh` 会给出对应系统的安装命令。
 - 选定的 Agent CLI 已安装在本地。
+- 多用户共享项目服务器或大量长期 SSHFS 挂载场景，建议按
+  `docs/ssh-sshfs-long-lived-connections.cn.md` 优化服务端 sshd 容量、keepalive、`nofile` 和 TCP 队列。
 
 ## 失败与恢复
 

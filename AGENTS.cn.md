@@ -11,6 +11,9 @@
 - `SKILL.md` — 精简的 simple 模式技能入口。默认只输出一条本地 bootstrap 命令；不得让 Agent
   收集 SSH target、路径、端口或命名空间。
 - `reference/{reverse,forward,scripts}.md` — 当前 simple reverse/forward 行为与辅助脚本契约。
+- `docs/{design,complete-flow,simple-flow,simple-forward-flow,ssh-sshfs-long-lived-connections}.md`
+  — 设计、完整流程、分模式方案和共享服务器 SSH/SSHFS 长连接优化。每份文档都应同步维护中文
+  `.cn.md` 版本。
 - `scripts/*.sh` — 确定性辅助脚本（stdout 输出 `KEY=VALUE`，stderr 输出说明信息）。`_common.sh` 是被
   source 的公共库（非入口脚本）。`simple-bootstrap.sh` 是公开的统一 simple 入口；它既可以从本地安装运行，
   也可以从远端 skill 安装目录读取后在本地运行。它会移交给 `simple-dispatch.sh`，由后者选择/分发
@@ -65,6 +68,9 @@
   才删除。若本机已有匹配且有效的用户授权行，则复用它，不追加任何内容。
 - 除上述 reverse-auth 明确例外外，SSH 认证仍由用户拥有。simple 流程可以读取已有用户
   SSH config/key/agent 行为，但不得安装 key，也不得静默创建凭据。
+- remote-harness 的会话级 keepalive、`sshfs reconnect` 和临时 SSH config 不能替代服务器容量配置。
+  多用户共享远程盒子或大量长期 SSHFS 挂载时，应在文档和用户提醒中指向
+  `docs/ssh-sshfs-long-lived-connections*.md`，由服务器运维侧调整 sshd、`nofile` 和 TCP 队列。
 - 启动后的 Agent 应该只看到 `ssh rlocal 'cd ... && <command>'` 这样的短命令。临时 ssh config 必须通过
   prepend 到 Agent `PATH` 的会话级 `bin/ssh` wrapper 隐藏；不要在注入规则里暴露
   `ssh -F <临时config> ...`。
