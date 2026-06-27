@@ -30,10 +30,10 @@
 ### 目录
 
 - [这是什么](#这是什么)
+- [安装 Skill](#安装-skill)
+- [Quick start](#quick-start)
 - [工作原理（两个方向）](#工作原理两个方向)
 - [服务器 SSH/SSHFS 长连接优化提醒](#服务器-sshsshfs-长连接优化提醒)
-- [安装](#安装)
-- [使用](#使用)
 - [环境要求](#环境要求)
 - [仓库结构](#仓库结构)
 - [安全与隐私](#安全与隐私)
@@ -48,6 +48,77 @@
 只给你一条命令；具体 SSH、路径、命名空间和挂载点都在你的本地终端里输入，不进入 Agent 聊天。
 
 记号：**A** = 运行 Agent 的机器；**P** = 存放代码的机器（用一个 ssh `<别名>` 指代）。
+
+### 安装 Skill
+
+仓库地址：[`https://github.com/chenjh16/remote-harness`](https://github.com/chenjh16/remote-harness)
+
+把 remote-harness 安装到**启动 Agent 的那台机器**上：远程开发本地项目时，通常是远端盒子；本地开发服务器项目时，通常是本机。
+
+**方式一：手动命令安装**
+
+```bash
+git clone https://github.com/chenjh16/remote-harness.git
+cd remote-harness
+./manage.sh            # 复制安装到 ~/.remote-harness + 各 Agent 的入口
+./manage.sh --dev      # 开发模式：软链到本仓库，改动即时生效
+./manage.sh --uninstall [claude|codex|opencode]   # 卸载（不动你的 ssh 配置/挂载）
+```
+
+**方式二：一句 Prompt 让 Agent 自动安装**
+
+在目标机器上的 Codex / Claude Code / opencode 里粘贴：
+
+```text
+请在当前机器上安装 remote-harness skill。GitHub 仓库是 https://github.com/chenjh16/remote-harness，请克隆或更新这个仓库，运行 ./manage.sh 安装到当前用户的 Claude Code / Codex / opencode 入口；不要修改 ~/.ssh；完成后告诉我可用的调用方式。
+```
+
+| Agent | 入口位置 | 调用 |
+|---|---|---|
+| 共享核心 | `~/.remote-harness/{SKILL.md, SKILL.cn.md, scripts/, reference/, docs/}` | （各方共用） |
+| Claude Code | `~/.claude/skills/remote-harness/SKILL.md` | `/remote-harness` |
+| Codex | `~/.codex/skills/remote-harness/SKILL.md` | `$remote-harness` |
+| opencode | `~/.config/opencode/command/remote-harness.md` | `/remote-harness` |
+
+**脚本**是唯一的单一事实来源——各 Agent 都调用 `~/.remote-harness/scripts/*`。每个 Agent 的入口
+形态不同：Claude Code 与 Codex 都是原生 *skill*（共用同一份 `SKILL.md`；Codex 无自定义斜杠命令，推荐用
+`$remote-harness` 直接调用技能），opencode 是让 Agent 去读共享 `SKILL.md` 的自定义命令。
+
+### Quick start
+
+先确认 SSH key 已按你的方向配置好：反向模式需要笔记本能登录远端盒子；正向模式需要本机能登录项目服务器。挂载发生的机器还需要 `sshfs`。
+
+**远程开发本地项目（默认 reverse）**
+
+在远端盒子里的 Agent 输入：
+
+```text
+$remote-harness 中文，远程开发本地，yolo
+```
+
+Claude Code / opencode 使用 `/remote-harness 中文，远程开发本地，yolo`。Agent 会返回一段在**本地终端**运行的命令。
+
+**本地开发远程项目（forward）**
+
+在本机 Agent 输入：
+
+```text
+$remote-harness 中文，本地开发远程项目，yolo
+```
+
+Claude Code / opencode 使用 `/remote-harness 中文，本地开发远程项目，yolo`。Agent 会返回同样形态的本地 bootstrap 命令。
+
+随后按这个流程走：
+
+1. 让 Agent 直接返回一条本地 bootstrap 命令。公开入口统一是 `simple-bootstrap.sh`；
+   如果脚本在远端 skill 目录，命令会先从远端读取它再在本地运行。
+2. 你在本地终端运行该命令，并按提示输入 SSH target、项目目录和可选挂载点。
+3. bootstrap 自动建立 reverse 隧道或 forward 直连，并通过 sshfs 完成挂载。
+4. 在挂载目录启动所选 Agent，并注入“项目命令必须在代码所在机器执行”的会话规则。
+5. 退出 Agent 时**自动卸载**。随时再次启动 remote-harness 重新连接（幂等；陈旧挂载会被检测并重挂）。
+
+简短说“本地开发远程项目”即可触发 forward；简短说“远程开发本地”即可触发 reverse。若说法无法判断，
+命令会在本地先让你选择模式，第一次默认 reverse，并记住上次选择。
 
 ### 工作原理（两个方向）
 
@@ -91,44 +162,6 @@ remote-harness 的单次会话会自动做这些事：使用会话级 SSH config
 
 完整配置模板、验证命令和回滚方法见
 [`docs/ssh-sshfs-long-lived-connections.cn.md`](docs/ssh-sshfs-long-lived-connections.cn.md)。
-
-### 安装
-
-```bash
-./manage.sh            # 复制安装到 ~/.remote-harness + 各 Agent 的入口
-./manage.sh --dev      # 开发模式：软链到本仓库，改动即时生效
-./manage.sh --uninstall [claude|codex|opencode]   # 卸载（不动你的 ssh 配置/挂载）
-```
-
-| Agent | 入口位置 | 调用 |
-|---|---|---|
-| 共享核心 | `~/.remote-harness/{SKILL.md, SKILL.cn.md, scripts/, reference/, docs/}` | （各方共用） |
-| Claude Code | `~/.claude/skills/remote-harness/SKILL.md` | `/remote-harness` |
-| Codex | `~/.codex/skills/remote-harness/SKILL.md` | `$remote-harness` |
-| opencode | `~/.config/opencode/command/remote-harness.md` | `/remote-harness` |
-
-**脚本**是唯一的单一事实来源——各 Agent 都调用 `~/.remote-harness/scripts/*`。每个 Agent 的入口
-形态不同：Claude Code 与 Codex 都是原生 *skill*（共用同一份 `SKILL.md`；Codex 无自定义斜杠命令，推荐用
-`$remote-harness` 直接调用技能），opencode 是让 Agent 去读共享 `SKILL.md` 的自定义命令。
-
-### 使用
-
-在你的 Agent 里启动 remote-harness：Claude Code/opencode 运行 `/remote-harness`（加 yolo：
-`/remote-harness 开启yolo模式`）；Codex 输入 `$remote-harness`（加 yolo：`$remote-harness yolo模式，中文`）。
-默认 simple reverse 会：
-
-1. 让 Agent 直接返回一条本地 bootstrap 命令。公开入口统一是 `simple-bootstrap.sh`；
-   如果脚本在远端 skill 目录，命令会先从远端读取它再在本地运行。
-2. 你在笔记本终端运行该命令，并输入远端 SSH target、本地项目目录、可选远端挂载点。
-3. bootstrap 建立反向隧道，把笔记本项目挂到远端。
-4. 在远端挂载目录启动所选 Agent，并注入“构建/测试在笔记本上跑”的会话规则。
-5. 退出 Agent 时**自动卸载**。随时再次启动 remote-harness 重新连接（幂等；陈旧挂载会被检测并重挂）。
-
-如果你要让 **Codex 在本地运行、项目和开发环境在服务器上**，直接说明这个需求，例如
-`$remote-harness 中文，本地 Codex 开发服务器上的项目`。simple forward 走同一个 bootstrap 入口并传入
-`--mode forward`；它把服务器项目映射到本地目录，本地负责文件读写/编辑/搜索，构建、运行、测试等项目命令通过 SSH 在服务器执行。
-简短说“本地开发远程项目”即可触发 forward；简短说“远程开发本地”即可触发 reverse。若说法无法判断，
-命令会在本地先让你选择模式，第一次默认 reverse，并记住上次选择。
 
 ### 环境要求
 
@@ -214,10 +247,10 @@ remote-harness/
 ### Table of Contents
 
 - [What it is](#what-it-is)
+- [Install the Skill](#install-the-skill)
+- [Quick start](#quick-start-1)
 - [How it works (two directions)](#how-it-works-two-directions)
 - [Server SSH/SSHFS Long-Lived Connection Tuning](#server-sshsshfs-long-lived-connection-tuning)
-- [Install](#install)
-- [Usage](#usage)
 - [Requirements](#requirements)
 - [Repo layout](#repo-layout)
 - [Security & privacy](#security--privacy)
@@ -233,6 +266,88 @@ skill with `$remote-harness`. In the default simple reverse mode, the agent retu
 concrete SSH targets, paths, namespaces, and mountpoints are entered in the user's local terminal,
 not in chat. Generically: **A** = the machine the agent runs on; **P** = the
 machine the code lives on (an ssh `<alias>`).
+
+### Install the Skill
+
+Repository: [`https://github.com/chenjh16/remote-harness`](https://github.com/chenjh16/remote-harness)
+
+Install remote-harness on the machine where you invoke the agent: for remote-dev-local-project,
+this is usually the remote box; for local-dev-server-project, this is usually your local machine.
+
+**Option 1: manual command install**
+
+```bash
+git clone https://github.com/chenjh16/remote-harness.git
+cd remote-harness
+./manage.sh            # copy-install to ~/.remote-harness + each agent's entry point
+./manage.sh --dev      # dev mode: symlink to this repo (edits go live)
+./manage.sh --uninstall [claude|codex|opencode]   # uninstall (leaves your ssh config/mounts alone)
+```
+
+**Option 2: one-prompt agent install**
+
+Paste this into Codex / Claude Code / opencode on the target machine:
+
+```text
+Install the remote-harness skill on this machine. GitHub repository: https://github.com/chenjh16/remote-harness; clone or update that repository, run ./manage.sh to install it for the current user's Claude Code / Codex / opencode entries, do not modify ~/.ssh, and tell me the available invocation commands when done.
+```
+
+| Agent | Location | Invoke |
+|---|---|---|
+| shared core | `~/.remote-harness/{SKILL.md, SKILL.cn.md, scripts/, reference/, docs/}` | (used by all) |
+| Claude Code | `~/.claude/skills/remote-harness/SKILL.md` | `/remote-harness` |
+| Codex | `~/.codex/skills/remote-harness/SKILL.md` | `$remote-harness` |
+| opencode | `~/.config/opencode/command/remote-harness.md` | `/remote-harness` |
+
+The **scripts** are the single source of truth — every agent calls `~/.remote-harness/scripts/*`.
+Each agent's entry differs by what it supports: Claude Code and Codex both use a native *skill* (the
+shared `SKILL.md`; Codex has no custom slash commands, so use `$remote-harness`); opencode is a
+custom command that reads the shared `SKILL.md`.
+
+### Quick start
+
+First make sure SSH keys are already configured for your direction: reverse needs your laptop to be
+able to SSH into the remote box; forward needs your local machine to SSH into the project server.
+The machine performing the mount also needs `sshfs`.
+
+**Remote agent, local project (default reverse)**
+
+In the agent running on the remote box:
+
+```text
+$remote-harness English, remote dev local project, yolo
+```
+
+Claude Code / opencode use `/remote-harness English, remote dev local project, yolo`. The agent
+returns a command to run in your **local terminal**.
+
+**Local agent, remote project (forward)**
+
+In the local agent:
+
+```text
+$remote-harness English, local dev remote project, yolo
+```
+
+Claude Code / opencode use `/remote-harness English, local dev remote project, yolo`. The agent
+returns the same shape of local bootstrap command.
+
+Then:
+
+1. The agent returns one local bootstrap command. The public entry is always
+   `simple-bootstrap.sh`; if the script lives in a remote skill directory, the command fetches it
+   from there and then runs it locally.
+2. You run that command in your local terminal and enter the SSH target, project directory, and
+   optional mountpoint.
+3. The bootstrap opens the reverse tunnel or forward connection and mounts the project with sshfs.
+4. It launches the chosen agent in the mount and injects a session rule: project commands must run
+   on the machine that hosts the code.
+5. **Auto-unmounts on exit.** Start remote-harness again anytime to reconnect; stale mounts are
+   detected and replaced.
+
+Short phrases like "local dev remote project" trigger forward; "remote dev local project" triggers
+reverse. If the wording is ambiguous, the command asks for the mode locally, defaults to reverse on
+first run, and remembers the last choice.
 
 ### How it works (two directions)
 
@@ -251,8 +366,9 @@ box:   ssh <alias>          → 127.0.0.1:<PORT> → (tunnel) → laptop:22
 ```
 
 Both simple directions use session-local SSH config files and `known_hosts` under
-`~/.remote-harness/.sessions/...`, with OpenSSH multiplexing disabled. The only `~/.ssh` write exception is reverse mode: the
-laptop may get a tagged temporary `authorized_keys` block that is removed on exit.
+`~/.remote-harness/.sessions/...`, with OpenSSH multiplexing disabled. The only `~/.ssh` write
+exception is reverse mode: the laptop may get a tagged temporary `authorized_keys` block that is
+removed on exit.
 
 **② Forward — agent local, code on a directly ssh-reachable server.** No tunnel: the local machine
 ssh's straight to the server, mounts its project onto a local empty dir, the agent runs locally, and
@@ -277,50 +393,6 @@ For shared remote development servers, server-side capacity still matters. Opera
 
 See the full template, verification commands, and rollback notes in
 [`docs/ssh-sshfs-long-lived-connections.md`](docs/ssh-sshfs-long-lived-connections.md).
-
-### Install
-
-```bash
-./manage.sh            # copy-install to ~/.remote-harness + each agent's entry point
-./manage.sh --dev      # dev mode: symlink to this repo (edits go live)
-./manage.sh --uninstall [claude|codex|opencode]   # uninstall (leaves your ssh config/mounts alone)
-```
-
-| Agent | Location | Invoke |
-|---|---|---|
-| shared core | `~/.remote-harness/{SKILL.md, SKILL.cn.md, scripts/, reference/, docs/}` | (used by all) |
-| Claude Code | `~/.claude/skills/remote-harness/SKILL.md` | `/remote-harness` |
-| Codex | `~/.codex/skills/remote-harness/SKILL.md` | `$remote-harness` |
-| opencode | `~/.config/opencode/command/remote-harness.md` | `/remote-harness` |
-
-The **scripts** are the single source of truth — every agent calls `~/.remote-harness/scripts/*`.
-Each agent's entry differs by what it supports: Claude Code and Codex both use a native *skill* (the
-shared `SKILL.md`; Codex has no custom slash commands, so use `$remote-harness`); opencode is a
-custom command that reads the shared `SKILL.md`.
-
-### Usage
-
-Start remote-harness in your agent: Claude Code/opencode run `/remote-harness` (add yolo:
-`/remote-harness yolo`); Codex users type `$remote-harness` (add yolo:
-`$remote-harness yolo模式，中文`). The default simple reverse flow will:
-
-1. Have the agent return one local bootstrap command. The public entry is always
-   `simple-bootstrap.sh`; if the script lives in a remote skill directory, the command fetches it
-   from there and then runs it locally.
-2. You run it on the laptop and enter the remote SSH target, local project dir, and optional remote
-   mountpoint.
-3. The bootstrap opens the reverse tunnel and mounts the laptop project on the remote box.
-4. It launches the chosen agent in the remote mount and injects the session-scoped run-on-laptop rule.
-5. **Auto-unmounts on exit.** Start remote-harness again anytime to reconnect (idempotent; a stale
-   mount is detected and replaced).
-
-For **local Codex with the project and dev environment on a server**, say that explicitly, e.g.
-`$remote-harness local Codex, project on server`. Simple forward uses the same bootstrap entry with
-`--mode forward`: it mounts the server project locally, uses local file reads/writes/edits/searches, and runs
-build/run/test project commands on the server through SSH.
-Short phrases like "本地开发远程项目" trigger forward; "远程开发本地" triggers reverse. If the wording
-is ambiguous, the command asks for the mode locally, defaults to reverse on first run, and remembers
-the last choice.
 
 ### Requirements
 
